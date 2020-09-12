@@ -1,0 +1,1148 @@
+视频网络：
+service网络：192.168.0.0/16
+pod网络：172.7.0.0/16
+节点网络：10.4.7.0/24
+
+cyou网络
+service网络：10.4.0.0/16
+pod网络：172.7.0.0/16
+节点网络：192.168.2.0/24
+
+服务器系统ubuntu18.04
+cyou2-201
+cyou2-202
+cyou2-203  运维主机
+cyou2-204  代理节点，etcd
+cyou2-205  代理节点，etcd
+
+Docker配置文件
+/etc/docker/daemon.json
+{
+    "registry-mirrors": ["https://registry.docker-cn.com","http://hub-mirror.c.163.com"],
+    "bip": "172.7.201.1/24",
+    "exec-opts": ["native.cgroupdriver=systemd"],
+    "insecure-registries": ["harbor.cyou.com"]
+}
+
+
+运维主机(cyou2-203)：
+
+准备证书签发环境
+
+ubuntu@cyou2-203:~$ curl -s -L -o /usr/bin/cfssl https://pkg.cfssl.org/R1.2/cfssl_linux-amd64 
+ubuntu@cyou2-203:~$ curl -s -L -o /usr/bin/cfssljson https://pkg.cfssl.org/R1.2/cfssljson_linux-amd64 
+ubuntu@cyou2-203:~$ curl -s -L -o /usr/bin/cfssl-certinfo https://pkg.cfssl.org/R1.2/cfssl-certinfo_linux-amd64 
+ubuntu@cyou2-203:~$ sudo chmod +x /usr/bin/cfssl*
+
+创建生成ca证书的JSON配置文件
+
+ubuntu@cyou2-203:~$ vi /opt/certs/ca-config.json
+{
+    "signing": {
+        "default": {
+            "expiry": "175200h"
+        },
+        "profiles": {
+            "server": {
+                "expiry": "175200h",
+                "usages": [
+                    "signing",
+                    "key encipherment",
+                    "server auth"
+                ]
+            },
+            "client": {
+                "expiry": "175200h",
+                "usages": [
+                    "signing",
+                    "key encipherment",
+                    "client auth"
+                ]
+            },
+            "peer": {
+                "expiry": "175200h",
+                "usages": [
+                    "signing",
+                    "key encipherment",
+                    "server auth",
+                    "client auth"
+                ]
+            }
+        }
+    }
+}
+
+证书类型：
+  client： 客户端使用，用于服务器端认证客户端，比如etcdctl，etcd proxy, fleetctl, docker客户端
+  server： 服务端使用，客户端以此验证服务器端身份，比如docker服务端，kebe-apiserver
+  peer：  双向证书，用于etcd集群成员间通信
+
+创建生成CA证书签名请求(csr)的JSON配置文件
+
+证书存放目录/opt/certs/
+ubuntu@cyou2-203:~$ vi /opt/certs/ca-csr.json
+{
+    "CN": "kubernetes-ca",
+    "hosts": [
+    ],
+    "key": {
+        "algo": "rsa",
+        "size": 2048
+    },
+    "names": [
+        {
+            "C": "CN",
+            "ST": "beijing",
+            "L": "beijing",
+            "O": "od",
+            "OU": "ops"
+        }
+    ],
+    "ca": {
+        "expiry": "175200h"
+    }
+}
+
+CN: Common Name，浏览器使用该字段验证网站是否合法，一般写的是域名。非常重要。浏览器使用该字段验证网站是否合法
+C: Country， 国家
+ST: State，州，省
+L: Locality，地区，城市
+O: Organization Name，组织名称，公司名称
+OU: Organization Unit Name，组织单位名称，公司部门
+
+生成CA证书和私钥
+
+ubuntu@cyou2-203:/opt/certs$ sudo cfssl gencert -initca ca-csr.json | sudo cfssljson -bare ca -
+2019/01/18 09:31:19 [INFO] generating a new CA key and certificate from CSR
+2019/01/18 09:31:19 [INFO] generate received request
+2019/01/18 09:31:19 [INFO] received CSR
+2019/01/18 09:31:19 [INFO] generating key: rsa-2048
+2019/01/18 09:31:19 [INFO] encoded CSR
+2019/01/18 09:31:19 [INFO] signed certificate with serial number 345276964513449660162382535043012874724976422200
+
+
+
+部署Etcd集群(cyou2-201,cyou2-202,cyou2-205)
+版本：3.1.20
+1、签发证书，集群通信通过https
+
+证书申请请求文件
+ubuntu@cyou2-203:/opt/certs$ vi etcd-peer-csr.json
+{
+    "CN": "etcd-peer",
+    # etcd可能部署的主机IPi地址
+    "hosts": [
+        "192.168.2.201",
+        "192.168.2.202",
+        "192.168.2.203",
+        "192.168.2.204",
+        "192.168.2.205"
+    ],
+    "key": {
+        "algo": "rsa",
+        "size": 2048
+    },
+    "names": [
+        {
+            "C": "CN",
+            "ST": "hunan",
+            "L": "changsha",
+            "O": "cyou",
+            "OU": "ops"
+        }
+    ]
+}
+
+
+
+生成etcd证书和私钥
+ubuntu@cyou2-203:/opt/certs$ sudo fssl gencert -ca=ca.pem -ca-key=ca-key.pem -config=ca-config.json -profile=server etcd-peer-csr.json | sudo cfssljson -bare etcd-peer
+2019/01/18 09:35:09 [INFO] generate received request
+2019/01/18 09:35:09 [INFO] received CSR
+2019/01/18 09:35:09 [INFO] generating key: rsa-2048
+2019/01/18 0935:09 [INFO] encoded CSR
+2019/01/18 09:35:10 [INFO] signed certificate with serial number 324191491384928915605254764031096067872154649010
+2019/01/18 09:35:10 [WARNING] This certificate lacks a "hosts" field. This makes it unsuitable for
+websites. For more information see the Baseline Requirements for the Issuance and Management
+of Publicly-Trusted Certificates, v.1.1.6, from the CA/Browser Forum (https://cabforum.org);
+specifically, section 10.2.3 ("Information Requirements").
+
+
+etcd部署节点上：
+创建etcd用户
+ubuntu@cyou2-205:~$ useradd -s /sbin/nologin -M etcd
+
+需要安装etcd集群的主机上，解压，软连接
+
+ubuntu@cyou2-205:~$ tar xf /opt/src/etcd-v3.1.18-linux-amd64.tar.gz -C /opt
+ubuntu@cyou2-205:~$ ln -s /opt/etcd-v3.1.18-linux-amd64 /opt/etcd
+ubuntu@cyou2-205:~$ ls -l /opt
+lrwxrwxrwx 1 root   root   24 Jan 18 14:21 etcd -> etcd-v3.1.18-linux-amd64
+drwxr-xr-x 4 478493 89939 166 Jun 16  2018 etcd-v3.1.18-linux-amd64
+drwxr-xr-x 2 root   root   45 Jan 18 14:21 src
+
+
+创建目录，拷贝证书，私钥
+ubuntu@cyou2-205:~$ mkdir -p /data/etcd /data/logs/etcd-server
+ubuntu@cyou2-205:~$ chown -R etcd.etcd /data/etcd /data/logs/etcd-server/ /opt/etcd /opt/etcd-v3.1.20
+ubuntu@cyou2-205:~$ mkdir -p /opt/etcd/certs
+
+
+将运维主机(cyou2-203)上的ca.pem etcd-peer-key.pem etcd-peer.pem 证书拷贝/opt/etcd/certs目录下，注意私钥文件权限为600
+ubuntu@cyou2-205:/opt/etcd/certs$ ll
+drwxr-xr-x 2 etcd   etcd   4096 7月   7 21:39 ./
+drwxr-xr-x 4 ubuntu ubuntu 4096 7月   7 21:42 ../
+-rw-r--r-- 1 etcd   etcd   1359 7月   7 21:39 ca.pem
+-rw------- 1 etcd   etcd   1675 7月   7 21:39 etcd-peer-key.pem
+-rw-r--r-- 1 etcd   etcd   1444 7月   7 21:39 etcd-peer.pem
+
+
+创建etcd服务启动脚本
+ubuntu@cyou2-205:/opt/etcd$ vi etcd-server-startup.sh 
+#!/bin/sh
+./etcd --name etcd-server-2-205 \
+       --data-dir /data/etcd/etcd-server \
+       --listen-peer-urls https://192.168.2.205:2380 \
+       --listen-client-urls https://192.168.2.205:2379,http://127.0.0.1:2379 \
+       --quota-backend-bytes 8000000000 \
+       --initial-advertise-peer-urls https://192.168.2.205:2380 \
+       --advertise-client-urls https://192.168.2.205:2379,http://127.0.0.1:2379 \
+       --initial-cluster  etcd-server-2-201=https://192.168.2.201:2380,etcd-server-2-202=https://192.168.2.202:2380,etcd-server-2-205=https://192.168.2.205:2380 \
+       --ca-file ./certs/ca.pem \
+       --cert-file ./certs/etcd-peer.pem \
+       --key-file ./certs/etcd-peer-key.pem \
+       --client-cert-auth  \
+       --trusted-ca-file ./certs/ca.pem \
+       --peer-ca-file ./certs/ca.pem \
+       --peer-cert-file ./certs/etcd-peer.pem \
+       --peer-key-file ./certs/etcd-peer-key.pem \
+       --peer-client-cert-auth \
+       --peer-trusted-ca-file ./certs/ca.pem \
+       --log-output stdout
+
+集群之间访问走2380，对外访问走2379
+
+sudo chmod +x /opt/etcd/etcd-server-startup.sh
+
+
+使用supervisor管理后台进程
+sudo apt install supervisor -y
+sudo systemctl start supervisor
+sudo systemctl enable supervisor
+
+ubuntu@cyou2-205:$ vi /etc/supervisor/conf.d/etcd-server.conf 
+[program:etcd-server-2-205]
+command=/opt/etcd/etcd-server-startup.sh                        ; the program (relative uses PATH, can take args)
+numprocs=1                                                      ; number of processes copies to start (def 1)
+directory=/opt/etcd                                             ; directory to cwd to before exec (def no cwd)
+autostart=true                                                  ; start at supervisord start (default: true)
+autorestart=true                                                ; retstart at unexpected quit (default: true)
+startsecs=22                                                    ; number of secs prog must stay running (def. 1)
+startretries=3                                                  ; max # of serial start failures (default 3)
+exitcodes=0,2                                                   ; 'expected' exit codes for process (default 0,2)
+stopsignal=QUIT                                                 ; signal used to kill process (default TERM)
+stopwaitsecs=10                                                 ; max num secs to wait b4 SIGKILL (default 10)
+stopasgroup=true                                                ;
+user=etcd                                                       ; setuid to this UNIX account to run the program
+redirect_stderr=false                                           ; redirect proc stderr to stdout (default false)
+stdout_logfile=/data/logs/etcd-server/etcd.stdout.log           ; stdout log path, NONE for none; default AUTO
+stdout_logfile_maxbytes=64MB                                    ; max # logfile bytes b4 rotation (default 50MB)
+stdout_logfile_backups=4                                        ; # of stdout logfile backups (default 10)
+stdout_capture_maxbytes=1MB                                     ; number of bytes in 'capturemode' (default 0)
+stdout_events_enabled=false                                     ; emit events on stdout writes (default false)
+stderr_logfile=/data/logs/etcd-server/etcd.stderr.log           ; stderr log path, NONE for none; default AUTO
+stderr_logfile_maxbytes=64MB                                    ; max # logfile bytes b4 rotation (default 50MB)
+stderr_logfile_backups=4                                        ; # of stderr logfile backups (default 10)
+stderr_capture_maxbytes=1MB                                     ; number of bytes in 'capturemode' (default 0)
+stderr_events_enabled=false                                     ; emit events on stderr writes (default false)
+
+
+# sudo supervisorctl update
+
+ubuntu@cyou2-205:/opt/etcd$ sudo supervisorctl status
+etcd-server-2-205                RUNNING   pid 1240, uptime 58 days, 1:48:17
+
+# netstat -luntp| grep etcd
+必须同时监控2379和2380才是启动成功
+
+其余etcd节点同样做一次，注意IP地址目录等!
+
+
+
+部署kube-apiserver集群(cyou2-201,cyou2-202)
+版本：1.15.2
+
+运维主机上：
+
+签发client证书,apiserver作为etcd的客户端
+创建生成证书签名请求(csr)的JSON配置文件
+
+ubuntu@cyou2-203:/opt/certs$ vi client-csr.json 
+{
+    "CN": "k8s-node",
+    "hosts": [
+    ],
+    "key": {
+        "algo": "rsa",
+        "size": 2048
+    },
+    "names": [
+        {
+            "C": "CN",
+            "ST": "hunan",
+            "L": "chagnsha",
+            "O": "cyou",
+            "OU": "ops"
+        }
+    ]
+}
+
+
+生成client证书和私钥
+ubuntu@cyou2-203:/opt/certs$ sudo cfssl gencert -ca=ca.pem -ca-key=ca-key.pem -config=ca-config.json -profile=client client-csr.json | sudo cfssljson -bare client
+2019/01/18 14:02:50 [INFO] generate received request
+2019/01/18 14:02:50 [INFO] received CSR
+2019/01/18 14:02:50 [INFO] generating key: rsa-2048
+2019/01/18 14:02:51 [INFO] encoded CSR
+2019/01/18 14:02:51 [INFO] signed certificate with serial number 423108651040279300242366884100637974155370861448
+2019/01/18 14:02:51 [WARNING] This certificate lacks a "hosts" field. This makes it unsuitable for
+websites. For more information see the Baseline Requirements for the Issuance and Management
+of Publicly-Trusted Certificates, v.1.1.6, from the CA/Browser Forum (https://cabforum.org);
+specifically, section 10.2.3 ("Information Requirements").
+
+签发server证书，作为apiserver对外提供服务需要的证书
+
+ubuntu@cyou2-203:/opt/certs$ vi apiserver-csr.json 
+{
+    "CN": "apiserver",
+    "hosts": [
+        "127.0.0.1",
+        "10.4.0.1",
+        "kubernetes.default",
+        "kubernetes.default.svc",
+        "kubernetes.default.svc.cluster",
+        "kubernetes.default.svc.cluster.local",
+        "192.168.2.200",
+        "192.168.2.201",
+        "192.168.2.202",
+        "192.168.2.203",
+        "192.168.2.204",
+        "192.168.2.205",
+        "192.168.2.206"
+    ],
+    "key": {
+        "algo": "rsa",
+        "size": 2048
+    },
+    "names": [
+        {
+            "C": "CN",
+            "ST": "hunan",
+            "L": "changsha",
+            "O": "cyou",
+            "OU": "ops"
+        }
+    ]
+}
+
+host：apiserver可能存在地址，其中192.168.2.200为VIP，虚拟IP，利用keepalived(10.4.0.1为集群IP)
+
+
+ubuntu@cyou2-203:/opt/certs$ sudo cfssl gencert -ca=ca.pem -ca-key=ca-key.pem -config=ca-config.json -profile=server apiserver-csr.json | sudo cfssljson -bare apiserver 
+2019/01/18 14:05:44 [INFO] generate received request
+2019/01/18 14:05:44 [INFO] received CSR
+2019/01/18 14:05:44 [INFO] generating key: rsa-2048
+2019/01/18 14:05:46 [INFO] encoded CSR
+2019/01/18 14:05:46 [INFO] signed certificate with serial number 633406650960616624590510576685608580490218676227
+2019/01/18 14:05:46 [WARNING] This certificate lacks a "hosts" field. This makes it unsuitable for
+websites. For more information see the Baseline Requirements for the Issuance and Management
+of Publicly-Trusted Certificates, v.1.1.6, from the CA/Browser Forum (https://cabforum.org);
+specifically, section 10.2.3 ("Information Requirements").
+
+
+apiserver运算节点上：
+拷贝证书，私钥，注意私钥文件属性600
+
+ubuntu@cyou2-201:/opt/kubernetes/server/bin/cert$ ll
+-rw------- 1 ubuntu ubuntu 1675 7月  16 20:56 apiserver-key.pem
+-rw-r--r-- 1 ubuntu ubuntu 1627 7月  16 20:56 apiserver.pem
+-rw------- 1 ubuntu ubuntu 1679 7月   8 21:51 ca-key.pem
+-rw-r--r-- 1 ubuntu ubuntu 1359 7月   8 21:50 ca.pem
+-rw------- 1 ubuntu ubuntu 1679 7月   8 21:51 client-key.pem
+-rw-r--r-- 1 ubuntu ubuntu 1371 7月   8 21:51 client.pem
+
+
+创建kube-apiserver启动的配置文件
+
+# 日志审计规则
+ubuntu@cyou2-201:/opt/kubernetes/server/bin/conf$ vi audit.yaml
+
+apiVersion: audit.k8s.io/v1beta1 # This is required.
+kind: Policy
+# Don't generate audit events for all requests in RequestReceived stage.
+omitStages:
+  - "RequestReceived"
+rules:
+  # Log pod changes at RequestResponse level
+  - level: RequestResponse
+    resources:
+    - group: ""
+      # Resource "pods" doesn't match requests to any subresource of pods,
+      # which is consistent with the RBAC policy.
+      resources: ["pods"]
+  # Log "pods/log", "pods/status" at Metadata level
+  - level: Metadata
+    resources:
+    - group: ""
+      resources: ["pods/log", "pods/status"]
+
+  # Don't log requests to a configmap called "controller-leader"
+  - level: None
+    resources:
+    - group: ""
+      resources: ["configmaps"]
+      resourceNames: ["controller-leader"]
+
+  # Don't log watch requests by the "system:kube-proxy" on endpoints or services
+  - level: None
+    users: ["system:kube-proxy"]
+    verbs: ["watch"]
+    resources:
+    - group: "" # core API group
+      resources: ["endpoints", "services"]
+
+  # Don't log authenticated requests to certain non-resource URL paths.
+  - level: None
+    userGroups: ["system:authenticated"]
+    nonResourceURLs:
+    - "/api*" # Wildcard matching.
+    - "/version"
+
+  # Log the request body of configmap changes in kube-system.
+  - level: Request
+    resources:
+    - group: "" # core API group
+      resources: ["configmaps"]
+    # This rule only applies to resources in the "kube-system" namespace.
+    # The empty string "" can be used to select non-namespaced resources.
+    namespaces: ["kube-system"]
+
+  # Log configmap and secret changes in all other namespaces at the Metadata level.
+  - level: Metadata
+    resources:
+    - group: "" # core API group
+      resources: ["secrets", "configmaps"]
+
+  # Log all other resources in core and extensions at the Request level.
+  - level: Request
+    resources:
+    - group: "" # core API group
+    - group: "extensions" # Version of group should NOT be included.
+
+  # A catch-all rule to log all other requests at the Metadata level.
+  - level: Metadata
+    # Long-running requests like watches that fall under this rule will not
+    # generate an audit event in RequestReceived.
+    omitStages:
+      - "RequestReceived"
+
+
+创建启动脚本
+
+ubuntu@cyou2-201:/opt/kubernetes/server/bin$ vi kube-apiserver.sh 
+#!/bin/bash
+./kube-apiserver \
+  --apiserver-count 2 \
+  --audit-log-path /data/logs/kubernetes/kube-apiserver/audit-log \
+  --audit-policy-file ./conf/audit.yaml \
+  --authorization-mode RBAC \
+  --client-ca-file ./cert/ca.pem \
+  --requestheader-client-ca-file ./cert/ca.pem \
+  --enable-admission-plugins NamespaceLifecycle,LimitRanger,ServiceAccount,DefaultStorageClass,DefaultTolerationSeconds,MutatingAdmissionWebhook,ValidatingAdmissionWebhook,ResourceQuota \
+  --etcd-cafile ./cert/ca.pem \
+  --etcd-certfile ./cert/client.pem \
+  --etcd-keyfile ./cert/client-key.pem \
+  --etcd-servers https://192.168.2.201:2379,https://192.168.2.202:2379,http
+s://192.168.2.205:2379 \
+  --service-account-key-file ./cert/ca-key.pem \
+  --service-cluster-ip-range 10.4.0.0/16 \
+  --service-node-port-range 3000-29999 \
+  --target-ram-mb=1024 \
+  --kubelet-client-certificate ./cert/client.pem \
+  --kubelet-client-key ./cert/client-key.pem \
+  --log-dir  /data/logs/kubernetes/kube-apiserver \
+  --tls-cert-file ./cert/apiserver.pem \
+  --tls-private-key-file ./cert/apiserver-key.pem \
+  --v 2
+
+
+ubuntu@cyou2-201:/opt/kubernetes/server/bin$ sudo chmod +x /opt/kubernetes/server/bin/kube-apiserver.sh
+ubuntu@cyou2-201:/opt/kubernetes/server/bin$ sudo mkdir -p /data/logs/kubenetes/kube-apiserver
+
+创建supervisor配置
+
+ubuntu@cyou2-201:/opt/kubernetes/server/bin$ vi /etc/supervisor/conf.d/kube-apiserver.conf 
+[program:kube-apiserver]
+command=/opt/kubernetes/server/bin/kube-apiserver.sh            ; the program (relative uses PATH, can take args)
+numprocs=1                                                      ; number of processes copies to start (def 1)
+directory=/opt/kubernetes/server/bin                            ; directory to cwd to before exec (def no cwd)
+autostart=true                                                  ; start at supervisord start (default: true)
+autorestart=true                                                ; retstart at unexpected quit (default: true)
+startsecs=22                                                    ; number of secs prog must stay running (def. 1)
+startretries=3                                                  ; max # of serial start failures (default 3)
+exitcodes=0,2                                                   ; 'expected' exit codes for process (default 0,2)
+stopsignal=QUIT                                                 ; signal used to kill process (default TERM)
+stopasgroup=true                                                ;
+stopwaitsecs=10                                                 ; max num secs to wait b4 SIGKILL (default 10)
+user=root                                                       ; setuid to this UNIX account to run the program
+redirect_stderr=false                                           ; redirect proc stderr to stdout (default false)
+stdout_logfile=/data/logs/kubernetes/kube-apiserver/apiserver.stdout.log        ; stdout log path, NONE for none; default AUTO
+stdout_logfile_maxbytes=64MB                                    ; max # logfile bytes b4 rotation (default 50MB)
+stdout_logfile_backups=4                                        ; # of stdout logfile backups (default 10)
+stdout_capture_maxbytes=1MB                                     ; number of bytes in 'capturemode' (default 0)
+stdout_events_enabled=false                                     ; emit events on stdout writes (default false)
+stderr_logfile=/data/logs/kubernetes/kube-apiserver/apiserver.stderr.log        ; stderr log path, NONE for none; default AUTO
+stderr_logfile_maxbytes=64MB                                    ; max # logfile bytes b4 rotation (default 50MB)
+stderr_logfile_backups=4                                        ; # of stderr logfile backups (default 10)
+stderr_capture_maxbytes=1MB                                     ; number of bytes in 'capturemode' (default 0)
+stderr_events_enabled=false 
+
+
+ubuntu@cyou2-201:~$ sudo supervisorctl add kube-apiserver
+ubuntu@cyou2-201:~$ sudo supervisorctl status
+etcd-server-2-201                RUNNING   pid 1641, uptime 58 days, 2:00:05
+kube-apiserver                   RUNNING   pid 57962, uptime 1:01:31
+
+其余apiserver节点上照做，注意IP地址目录等!
+
+
+两个代理节点上(cyou2-204,cyou2-205)
+利用nginx进行4层反向代理
+在主配置文件中进行配置，追加
+ubuntu@cyou2-204:/etc/nginx$ vi nginx.conf
+# stream为4层反代，http中为7层
+stream {
+    upstream kube-apiserver {
+        server 192.168.2.201:6443     max_fails=3 fail_timeout=30s;
+        server 192.168.2.202:6443     max_fails=3 fail_timeout=30s;
+    }
+    server {
+        listen 7443;
+        proxy_connect_timeout 2s;
+        proxy_timeout 900s;
+        proxy_pass kube-apiserver;
+    }
+}
+
+检查配置文件
+ubuntu@cyou2-204:/etc/nginx$sudo nginx -t 
+ubuntu@cyou2-204:/etc/nginx$sudo systemctl start nginx 
+ubuntu@cyou2-204:/etc/nginx$sudo systemctl enable nginx 
+
+
+# 监听脚本，监控7443端口
+ubuntu@cyou2-204:/etc/nginx$ vi /etc/keepalived/check_port.sh 
+#!/bin/bash
+#keepalived 监控端口脚本
+#使用方法：
+#在keepalived的配置文件中
+#vrrp_script check_port {#创建一个vrrp_script脚本,检查配置
+#    script "/etc/keepalived/check_port.sh 6379" #配置监听的端口
+#    interval 2 #检查脚本的频率,单位（秒）
+#}
+CHK_PORT=$1
+if [ -n "$CHK_PORT" ];then
+        PORT_PROCESS=`ss -lt|grep $CHK_PORT|wc -l`
+        if [ $PORT_PROCESS -eq 0 ];then
+                echo "Port $CHK_PORT Is Not Used,End."
+                exit 1
+        fi
+else
+        echo "Check Port Cant Be Empty!"
+fi
+
+
+如果上面那个脚本不可用，可用修改过后的
+CHK_PORT=$1
+if [ -n "$CHK_PORT" ];then
+        PORT_PROCESS=`ss -lnt|grep $CHK_PORT|wc -l`
+        if [ $PORT_PROCESS -eq 0 ];then
+                echo "Port $CHK_PORT Is Not Used,End."
+                exit 1
+        fi
+else
+        echo "Check Port Cant Be Empty!"
+fi
+vi
+
+利用keepalived做高可用，keepalived配置文件
+192.168.1.204机器上，主keepalived配置文件，注意其中的interface
+ubuntu@cyou2-204:/etc/nginx$ sudo vi /etc/keepalived/keepalived.conf 
+! Configuration File for keepalived
+
+global_defs {
+   router_id 192.168.2.204
+
+}
+
+vrrp_script chk_nginx {
+    script "/etc/keepalived/check_port.sh 7443"
+    interval 2
+    weight -20
+}
+
+vrrp_instance VI_1 {
+    state MASTER
+    interface ens33
+    virtual_router_id 251
+    priority 100
+    advert_int 1
+    mcast_src_ip 192.168.2.204
+    # nopreempt 非抢占式
+    nopreempt
+
+    authentication {
+        auth_type PASS
+        auth_pass 11111111
+    }
+    track_script {
+         chk_nginx
+    }
+    virtual_ipaddress {
+        192.168.2.200
+    }
+}
+
+
+
+192.168.1.205机器上,从keepalived配置文件吗，注意其中的interface
+ubuntu@cyou2-205:/etc/nginx$ vi /etc/keepalived/keepalived.conf 
+! Configuration File for keepalived
+global_defs {
+	router_id 192.168.2.205
+}
+vrrp_script chk_nginx {
+	script "/etc/keepalived/check_port.sh 7443"
+	interval 2
+	weight -20
+}
+vrrp_instance VI_1 {
+	state BACKUP
+	interface ens33
+	virtual_router_id 251
+	mcast_src_ip 192.168.2.205
+	priority 90
+	advert_int 1
+	authentication {
+		auth_type PASS
+		auth_pass 11111111
+	}
+	track_script {
+		chk_nginx
+	}
+	virtual_ipaddress {
+		192.168.2.200
+	}
+}
+
+两个代理节点上执行:
+sudo systemctl start keepalived
+sudo systemctl enable keepalived
+启动成功后在主keepalived节点上可以查看到虚拟VIP地址
+如果出问题检查日志/var/log/message
+
+如果VRP发生飘动，除非做好万全的准备才能让VRP回到主节点
+
+
+
+
+部署kube-controller-manager(cyou2-201,cyou2-202)
+
+
+ubuntu@cyou2-201:~$ vi /opt/kubernetes/server/bin/kube-controller-manager.sh 
+#!/bin/sh
+./kube-controller-manager \
+  --cluster-cidr 172.7.0.0/16 \
+  --leader-elect true \
+  --log-dir /data/logs/kubernetes/kube-controller-manager \
+  --master http://127.0.0.1:8080 \
+  --service-account-private-key-file ./cert/ca-key.pem \
+  --service-cluster-ip-range 10.4.0.0/16 \
+  --root-ca-file ./cert/ca.pem \
+  --v 2
+
+ubuntu@cyou2-201:~$ sudo chmod +x /etc/kubenetes/server/bin/kube-controller-manager.sh
+ubuntu@cyou2-201:~$ sudo mkdir -p /data/logs/kubernetes/kube-controller-manager
+
+
+ubuntu@cyou2-201:~$ vi /etc/supervisor/conf.d/kube-controller-manager.conf 
+[program:kube-controller-manager]
+command=/opt/kubernetes/server/bin/kube-controller-manager.sh                     ; the program (relative uses PATH, can take args)
+numprocs=1                                                                        ; number of processes copies to start (def 1)
+directory=/opt/kubernetes/server/bin                                              ; directory to cwd to before exec (def no cwd)
+autostart=true                                                                    ; start at supervisord start (default: true)
+autorestart=true                                                                  ; retstart at unexpected quit (default: true)
+startsecs=22                                                                      ; number of secs prog must stay running (def. 1)
+startretries=3                                                                    ; max # of serial start failures (default 3)
+exitcodes=0,2                                                                     ; 'expected' exit codes for process (default 0,2)
+stopsignal=QUIT                                                                   ; signal used to kill process (default TERM)
+stopwaitsecs=10                                                                   ; max num secs to wait b4 SIGKILL (default 10)
+stopasgroup=true
+user=root                                                                         ; setuid to this UNIX account to run the program
+redirect_stderr=false                                                             ; redirect proc stderr to stdout (default false)
+stdout_logfile=/data/logs/kubernetes/kube-controller-manager/controll.stdout.log  ; stdout log path, NONE for none; default AUTO
+stdout_logfile_maxbytes=64MB                                                      ; max # logfile bytes b4 rotation (default 50MB)
+stdout_logfile_backups=4                                                          ; # of stdout logfile backups (default 10)
+stdout_capture_maxbytes=1MB                                                       ; number of bytes in 'capturemode' (default 0)
+stdout_events_enabled=false                                                       ; emit events on stdout writes (default false)
+stderr_logfile=/data/logs/kubernetes/kube-controller-manager/controll.stderr.log  ; stderr log path, NONE for none; default AUTO
+stderr_logfile_maxbytes=64MB                                                      ; max # logfile bytes b4 rotation (default 50MB)
+stderr_logfile_backups=4                                                          ; # of stderr logfile backups (default 10)
+stderr_capture_maxbytes=1MB                                                       ; number of bytes in 'capturemode' (default 0)
+stderr_events_enabled=false                                                       ; emit events on stderr writes (default false)
+
+
+ubuntu@cyou2-201:~$ sudo supervisorctl update
+ubuntu@cyou2-201:~$ sudo supervisorctl status
+etcd-server-2-201                RUNNING   pid 1641, uptime 58 days, 2:23:33
+kube-apiserver                   RUNNING   pid 57962, uptime 1:24:59
+kube-controller-manager          STARTING
+
+ubuntu@cyou2-201:~$ sudo supervisorctl status
+[sudo] password for ubuntu: 
+etcd-server-2-201                RUNNING   pid 1641, uptime 58 days, 2:23:33
+kube-apiserver                   RUNNING   pid 57962, uptime 1:24:59
+kube-controller-manager          RUNNING   pid 58100, uptime 1:16:38
+
+
+
+
+部署kube-scheduler集群(cyou2-201,cyou2-202)
+
+其中master都是找本机的apiserver（kube-controller-manager和kube-scheduler找apiserver），可以走http协议，如果需要交叉需要加证书
+主控节点的组件都必须在一个节点，如果主节点的三个组件分布在不同的机器上，需要client.pem和client-key.pem
+
+ubuntu@cyou2-201:~$ vi /opt/kubernetes/server/bin/kube-scheduler.sh
+#!/bin/sh
+./kube-scheduler \
+  --leader-elect  \
+  --log-dir /data/logs/kubernetes/kube-scheduler \
+  --master http://127.0.0.1:8080 \
+  --v 2
+
+ubuntu@cyou2-201:~$ sudo chmod +x /etc/kubernetes/server/bin/kube-scheduler.sh
+ubuntu@cyou2-201:~$ sudo mkdir -p /data/logs/kubernetes/kube-scheduler
+
+ubuntu@cyou2-201:~$ sudo vi /etc/supervisor/conf.d/kube-scheduler.conf 
+[program:kube-scheduler]
+command=/opt/kubernetes/server/bin/kube-scheduler.sh                     ; the program (relative uses PATH, can take args)
+numprocs=1                                                               ; number of processes copies to start (def 1)
+directory=/opt/kubernetes/server/bin                                     ; directory to cwd to before exec (def no cwd)
+autostart=true                                                           ; start at supervisord start (default: true)
+autorestart=true                                                         ; retstart at unexpected quit (default: true)
+startsecs=22                                                             ; number of secs prog must stay running (def. 1)
+startretries=3                                                           ; max # of serial start failures (default 3)
+exitcodes=0,2                                                            ; 'expected' exit codes for process (default 0,2)
+stopsignal=QUIT                                                          ; signal used to kill process (default TERM)
+stopwaitsecs=10                                                          ; max num secs to wait b4 SIGKILL (default 10)
+stopasgroup=true
+user=root                                                                ; setuid to this UNIX account to run the program
+redirect_stderr=false                                                    ; redirect proc stderr to stdout (default false)
+stdout_logfile=/data/logs/kubernetes/kube-scheduler/scheduler.stdout.log ; stdout log path, NONE for none; default AUTO
+stdout_logfile_maxbytes=64MB                                             ; max # logfile bytes b4 rotation (default 50MB)
+stdout_logfile_backups=4                                                 ; # of stdout logfile backups (default 10)
+stdout_capture_maxbytes=1MB                                              ; number of bytes in 'capturemode' (default 0)
+stdout_events_enabled=false                                              ; emit events on stdout writes (default false)
+stderr_logfile=/data/logs/kubernetes/kube-scheduler/scheduler.stderr.log ; stderr log path, NONE for none; default AUTO
+stderr_logfile_maxbytes=64MB                                             ; max # logfile bytes b4 rotation (default 50MB)
+stderr_logfile_backups=4                                                 ; # of stderr logfile backups (default 10)
+stderr_capture_maxbytes=1MB                                              ; number of bytes in 'capturemode' (default 0)
+stderr_events_enabled=false                                              ; emit events on stderr writes (default false)
+
+ubuntu@cyou2-201:~$ sudo ln -s /opt/kubernetes/server/bin/kubectl /usr/bin/kubectl
+检查集群健康状态(cluster_status)
+ubuntu@cyou2-201:~$ kubectl get cs
+NAME                 STATUS    MESSAGE              ERROR
+etcd-2               Healthy   {"health": "true"}   
+etcd-0               Healthy   {"health": "true"}   
+etcd-1               Healthy   {"health": "true"}   
+scheduler            Healthy   ok                   
+controller-manager   Healthy   ok     
+
+
+
+部署运算节点上的kubelet集群(cyou2-201,cyou2-202)
+
+证书签发kubelet 
+kubelet对外提供https服务，apiserver需要来询问节点情况，需要签发server证书，需要将可能部署kubelet节点IP写上，新增加的节点可以重新签发一套证书，老节点可以不动，但是这样就有两套不一样的证书(不建议)，需要重新更新证书
+
+ubuntu@cyou2-203:/opt/certs$ sudo vi kubelet-csr.json
+{
+    "CN": "kubelet-node",
+    "hosts": [
+    "127.0.0.1",
+    "192.168.2.200",
+    "192.168.2.201",
+    "192.168.2.202",
+    "192.168.2.203",
+    "192.168.2.204",
+    "192.168.2.205",
+    "192.168.2.206",
+    "192.168.2.207",
+    "192.168.2.208",
+    "192.168.2.209",
+    "192.168.2.210"
+    ],
+    "key": {
+        "algo": "rsa",
+        "size": 2048
+    },
+    "names": [
+        {
+            "C": "CN",
+            "ST": "hunan",
+            "L": "changsha",
+            "O": "cyou",
+            "OU": "ops"
+        }
+    ]
+}
+
+ubuntu@cyou2-203:/opt/certs$ sudo cfssl gencert -ca=ca.pem -ca-key=ca-key.pem -config=ca-config.json -profile=server kubelet-csr.json | sudo cfssljson -bare kubelet
+
+拷贝证书：
+ubuntu@cyou2-201:~$ ls -l /opt/kubernetes/server/bin/cert
+total 40
+-rw------- 1 ubuntu ubuntu 1675 7月  16 20:56 apiserver-key.pem
+-rw-r--r-- 1 ubuntu ubuntu 1627 7月  16 20:56 apiserver.pem
+-rw------- 1 ubuntu ubuntu 1679 7月   8 21:51 ca-key.pem
+-rw-r--r-- 1 ubuntu ubuntu 1359 7月   8 21:50 ca.pem
+-rw------- 1 ubuntu ubuntu 1679 7月   8 21:51 client-key.pem
+-rw-r--r-- 1 ubuntu ubuntu 1371 7月   8 21:51 client.pem
+-rw------- 1 ubuntu ubuntu 1679 7月  16 21:29 kubelet-key.pem
+-rw-r--r-- 1 ubuntu ubuntu 1493 7月  16 21:29 kubelet.pem
+
+
+
+/opt/kubernetes/server/bin/conf 目录下
+创建kubelet.kubeconfig配置文件
+  1、set-cluster
+  2、set-credentials
+  3、set-context
+  4、use-context
+
+ubuntu@cyou2-201:/opt/kubernetes/server/bin/conf$ sudo kubectl config set-cluster myk8s \
+  --certificate-authority=/opt/kubernetes/server/bin/cert/ca.pem \
+  --embed-certs=true \
+  --server=https://192.168.2.200:7443 \
+  --kubeconfig=kubelet.kubeconfig
+
+Cluster "myk8s" set.
+
+ubuntu@cyou2-201:/opt/kubernetes/server/bin/conf$  sudo kubectl config set-credentials k8s-node --client-certificate=/opt/kubernetes/server/bin/cert/client.pem --client-key=/opt/kubernetes/server/bin/cert/client-key.pem --embed-certs=true --kubeconfig=kubelet.kubeconfig
+
+User "k8s-node" set.
+
+ubuntu@cyou2-201:/opt/kubernetes/server/bin/conf$  sudo kubectl config set-context myk8s-context \
+  --cluster=myk8s \
+  --user=k8s-node \
+  --kubeconfig=kubelet.kubeconfig
+
+Context "myk8s-context" created.
+
+ubuntu@cyou2-201:/opt/kubernetes/server/bin/conf$ sudo kubectl config use-context myk8s-context --kubeconfig=kubelet.kubeconfig
+
+Switched to context "myk8s-context".
+
+
+角色绑定：（）
+ubuntu@cyou2-201:/opt/kubernetes/server/bin/conf$ vi /opt/kubernetes/server/bin/conf/k8s-node.yaml
+
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: k8s-node
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: system:node
+subjects:
+- apiGroup: rbac.authorization.k8s.io
+  kind: User
+  name: k8s-node
+
+# 创建集群的一种资源，在存储到etcd中
+ubuntu@cyou2-201:/opt/kubernetes/server/bin/conf$ kubectl create -f k8s-node.yaml
+clusterrolebinding.rbac.authorization.k8s.io/k8s-node create
+
+检查：
+ubuntu@cyou2-201:/opt/kubernetes/server/bin/conf$ kubectl get clusterrolebinding k8s-node -o yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  annotations:
+    kubectl.kubernetes.io/last-applied-configuration: |
+      {"apiVersion":"rbac.authorization.k8s.io/v1","kind":"ClusterRoleBinding","metadata":{"annotations":{},"name":"k8s-node"},"roleRef":{"apiGroup":"rbac.authorization.k8s.io","kind":"ClusterRole","name":"system:node"},"subjects":[{"apiGroup":"rbac.authorization.k8s.io","kind":"User","name":"k8s-node"}]}
+  creationTimestamp: "2020-07-09T14:45:20Z"
+  name: k8s-node
+  resourceVersion: "19875"
+  selfLink: /apis/rbac.authorization.k8s.io/v1/clusterrolebindings/k8s-node
+  uid: e9adf7ea-b299-4bc6-93fd-f3b507493f1a
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: system:node
+subjects:
+- apiGroup: rbac.authorization.k8s.io
+  kind: User
+  name: k8s-node
+
+
+创建kubelet.kubeconfig配置文件可复制到其余节点
+角色绑定，只需要做一次
+
+
+准备pause镜像，在运维主机上
+# docker pull kubenetes/pause
+# docker tag kubenetes/pause:latest harbor.cyou.com/public/pause:latest
+# docke login harbor.cyou.com
+# docker push harbor.cyou.com/k8s/pause:latest
+
+
+ubuntu@cyou2-201:/opt/kubernetes/server/bin$ vi kubelet-2201.sh 
+#!/bin/sh
+./kubelet \
+  --anonymous-auth=false \
+  --cgroup-driver systemd \
+  --cluster-dns 10.4.0.2 \
+  --cluster-domain cluster.local \
+  --runtime-cgroups=/systemd/system.slice --kubelet-cgroups=/systemd/system.slice \
+  --fail-swap-on="false" \
+  --client-ca-file ./cert/ca.pem \
+  --tls-cert-file ./cert/kubelet.pem \
+  --tls-private-key-file ./cert/kubelet-key.pem \
+  # 注意做实验时hostname写的IP，写主机名更好
+  # --hostname-override cyou2-201.host.com \
+  --hostname-override 192.168.2.201 \
+  --image-gc-high-threshold 20 \
+  --image-gc-low-threshold 10 \
+  --kubeconfig ./conf/kubelet.kubeconfig \
+  --log-dir /data/logs/kubernetes/kube-kubelet \
+  --pod-infra-container-image harbor.cyou.com/k8s/pause:latest \
+  --root-dir /data/kubelet
+
+
+ubuntu@cyou2-201:/opt/kubernetes/server/bin$ sudo chmod +x /opt/kubernetes/server/bin/kubelet-721.sh
+ubuntu@cyou2-201:/opt/kubernetes/server/bin$ sudo mkdir -p /data/logs/kubernetes/kube-kubelet /data/kubelet
+
+
+
+ubuntu@cyou2-201:/opt/kubernetes/server/bin$ sudo vi /etc/supervisor/conf.d/kube-kubelet.conf 
+[program:kube-kubelet]
+command=/opt/kubernetes/server/bin/kubelet-2201.sh                ; the program (relative uses PATH, can take args)
+numprocs=1                                                        ; number of processes copies to start (def 1)
+directory=/opt/kubernetes/server/bin                              ; directory to cwd to before exec (def no cwd)
+autostart=true                                                    ; start at supervisord start (default: true)
+autorestart=true              									  ; retstart at unexpected quit (default: true)
+startsecs=22                  									  ; number of secs prog must stay running (def. 1)
+startretries=3                									  ; max # of serial start failures (default 3)
+exitcodes=0,2                 									  ; 'expected' exit codes for process (default 0,2)
+stopsignal=QUIT               									  ; signal used to kill process (default TERM)
+stopwaitsecs=10               									  ; max num secs to wait b4 SIGKILL (default 10)
+stopasgroup=true
+user=root                                                         ; setuid to this UNIX account to run the program
+redirect_stderr=false                                             ; redirect proc stderr to stdout (default false)
+stdout_logfile=/data/logs/kubernetes/kube-kubelet/kubelet.stdout.log   ; stdout log path, NONE for none; default AUTO
+stdout_logfile_maxbytes=64MB                                      ; max # logfile bytes b4 rotation (default 50MB)
+stdout_logfile_backups=4                                          ; # of stdout logfile backups (default 10)
+stdout_capture_maxbytes=1MB                                       ; number of bytes in 'capturemode' (default 0)
+stdout_events_enabled=false                                       ; emit events on stdout writes (default false)
+stderr_logfile=/data/logs/kubernetes/kube-kubelet/kubelet.stderr.log   ; stderr log path, NONE for none; default AUTO
+stderr_logfile_maxbytes=64MB                                      ; max # logfile bytes b4 rotation (default 50MB)
+stderr_logfile_backups=4                                          ; # of stderr logfile backups (default 10)
+stderr_capture_maxbytes=1MB   									  ; number of bytes in 'capturemode' (default 0)
+stderr_events_enabled=false   									  ; emit events on stderr writes (default false)
+
+
+
+
+ubuntu@cyou2-201:/opt/kubernetes/server/bin$ sudo supervisorctl update
+ubuntu@cyou2-201:/opt/kubernetes/server/bin$ sudo supervisorctl status
+etcd-server-2-201                RUNNING   pid 1641, uptime 58 days, 2:39:01
+kube-apiserver                   RUNNING   pid 57962, uptime 1:40:27
+kube-controller-manager          RUNNING   pid 58100, uptime 1:32:06
+kube-kubelet                     STARTING
+ubuntu@cyou2-201:/opt/kubernetes/server/bin$ sudo supervisorctl status
+etcd-server-2-201                RUNNING   pid 1641, uptime 58 days, 2:39:01
+kube-apiserver                   RUNNING   pid 57962, uptime 1:40:27
+kube-controller-manager          RUNNING   pid 58100, uptime 1:32:06
+kube-kubelet                     RUNNING   pid 58099, uptime 1:32:06
+
+
+检查node集群：
+ubuntu@cyou2-201:/opt/kubernetes/server/bin$ kubectl get node
+NAME            STATUS   ROLES    AGE    VERSION
+192.168.2.201   Ready    <none>   116m   v1.15.4
+192.168.2.202   Ready    <none>   116m   v1.15.4
+ubuntu@cyou2-201:/opt/kubernetes/server/bin$ kubectl get nodes
+NAME            STATUS   ROLES    AGE    VERSION
+192.168.2.201   Ready    <none>   116m   v1.15.4
+192.168.2.202   Ready    <none>   116m   v1.15.4
+
+
+设置ROLES
+kubectl label node NAME node-role.kubernetes.io/master=
+kubectl label node NAME node-role.kubernetes.io/node=
+
+ubuntu@cyou2-201:/opt/kubernetes/server/bin$ kubectl label node 192.168.2.201 node-role.kubernetes.io/master=
+node/192.168.2.201 labeled
+ubuntu@cyou2-201:/opt/kubernetes/server/bin$ kubectl label node 192.168.2.202 node-role.kubernetes.io/master=
+node/192.168.2.202 labeled
+ubuntu@cyou2-201:/opt/kubernetes/server/bin$ kubectl get nodes
+NAME            STATUS   ROLES    AGE    VERSION
+192.168.2.201   Ready    master   127m   v1.15.4
+192.168.2.202   Ready    master   127m   v1.15.4
+ubuntu@cyou2-201:/opt/kubernetes/server/bin$ kubectl label node 192.168.2.201 node-role.kubernetes.io/node=
+node/192.168.2.201 labeled
+ubuntu@cyou2-201:/opt/kubernetes/server/bin$ kubectl label node 192.168.2.202 node-role.kubernetes.io/node=
+node/192.168.2.202 labeled
+ubuntu@cyou2-201:/opt/kubernetes/server/bin$ kubectl get nodes
+NAME            STATUS   ROLES         AGE    VERSION
+192.168.2.201   Ready    master,node   128m   v1.15.4
+192.168.2.202   Ready    master,node   128m   v1.15.4
+
+
+
+
+
+部署kube-proxy(cyou2-201,cyou2-202)
+
+运维主机创建生成证书签名请求(CSR)文件的JSON配置文件
+ubuntu@cyou2-203:/opt/certs$ sudo vi kube-proxy-csr.json 
+{
+    "CN": "system:kube-proxy",
+    "key": {
+        "algo": "rsa",
+        "size": 2048
+    },
+    "names": [
+        {
+            "C": "CN",
+            "ST": "hunan",
+            "L": "changsha",
+            "O": "cyou",
+            "OU": "ops"
+        }
+    ]
+}
+
+生成kube-proxy证书和私钥
+ubuntu@cyou2-203:/opt/certs$ sudo cfssl gencert -ca=ca.pem -ca-key=ca-key.pem -config=ca-config.json -profile=client kube-proxy-csr.json| sudo cfssljson -bare kube-proxy-client
+2020/09/12 21:32:58 [INFO] generate received request
+2020/09/12 21:32:58 [INFO] received CSR
+2020/09/12 21:32:58 [INFO] generating key: rsa-2048
+2020/09/12 21:32:58 [INFO] encoded CSR
+2020/09/12 21:32:58 [INFO] signed certificate with serial number 581442908029322379415549607129808929451214736235
+2020/09/12 21:32:58 [WARNING] This certificate lacks a "hosts" field. This makes it unsuitable for
+websites. For more information see the Baseline Requirements for the Issuance and Management
+of Publicly-Trusted Certificates, v.1.1.6, from the CA/Browser Forum (https://cabforum.org);
+specifically, section 10.2.3 ("Information Requirements").
+
+
+拷贝证书至各运算节点上/opt/kubernetes/server/bin/cert
+ubuntu@cyou2-201:/opt/kubernetes/server/bin/conf$ ll /opt/kubernetes/server/bin/cert
+total 48
+drwxr-xr-x 2 root   root   4096 9月  12 21:34 ./
+drwxr-xr-x 4 ubuntu ubuntu 4096 9月  12 21:39 ../
+-rw------- 1 ubuntu ubuntu 1675 7月  16 20:56 apiserver-key.pem
+-rw-r--r-- 1 ubuntu ubuntu 1627 7月  16 20:56 apiserver.pem
+-rw------- 1 ubuntu ubuntu 1679 7月   8 21:51 ca-key.pem
+-rw-r--r-- 1 ubuntu ubuntu 1359 7月   8 21:50 ca.pem
+-rw------- 1 ubuntu ubuntu 1679 7月   8 21:51 client-key.pem
+-rw-r--r-- 1 ubuntu ubuntu 1371 7月   8 21:51 client.pem
+-rw------- 1 ubuntu ubuntu 1679 7月  16 21:29 kubelet-key.pem
+-rw-r--r-- 1 ubuntu ubuntu 1493 7月  16 21:29 kubelet.pem
+-rw------- 1 root   root   1679 9月  12 21:34 kube-proxy-client-key.pem
+-rw-r--r-- 1 root   root   1383 9月  12 21:34 kube-proxy-client.pem
+
+
+运算节点上/opt/kubernetes/server/bin/conf目录下：
+
+ubuntu@cyou2-202:/opt/kubernetes/server/bin/conf$ sudo kubectl config set-cluster myk8s \
+>   --certificate-authority=/opt/kubernetes/server/bin/cert/ca.pem \
+>   --embed-certs=true \
+>   --server=https://192.168.2.200:7443 \
+>   --kubeconfig=kube-proxy.kubeconfig
+Cluster "myk8s" set.
+
+ubuntu@cyou2-202:/opt/kubernetes/server/bin/conf$ sudo  kubectl config set-credentials kube-proxy \
+>   --client-certificate=/opt/kubernetes/server/bin/cert/kube-proxy-client.pem \
+>   --client-key=/opt/kubernetes/server/bin/cert/kube-proxy-client-key.pem \
+>   --embed-certs=true \
+>   --kubeconfig=kube-proxy.kubeconfig
+User "kube-proxy" set.
+
+ubuntu@cyou2-202:/opt/kubernetes/server/bin/conf$ sudo kubectl config set-context myk8s-context \
+>   --cluster=myk8s \
+>   --user=kube-proxy \
+>   --kubeconfig=kube-proxy.kubeconfig
+Context "myk8s-context" created.
+
+ubuntu@cyou2-202:/opt/kubernetes/server/bin/conf$ sudo kubectl config use-context myk8s-context --kubeconfig=kube-proxy.kubeconfig
+Switched to context "myk8s-context".
+
+
+ubuntu@cyou2-201:/opt/kubernetes/server/bin$ sudo vi  kube-proxy-2201.sh 
+#!/bin/sh
+./kube-proxy \
+  --cluster-cidr 10.4.0.0/16 \
+  --hostname-override 192.168.2.201 \
+  --kubeconfig ./conf/kube-proxy.kubeconfig
+
+
+ubuntu@cyou2-201:~$ sudo vi /etc/supervisor/conf.d/kube-proxy.conf 
+[program:kube-proxy]
+command=/opt/kubernetes/server/bin/kube-proxy-2201.sh                 ; the program (relative uses PATH, can take args)
+numprocs=1                                                           ; number of processes copies to start (def 1)
+directory=/opt/kubernetes/server/bin                                 ; directory to cwd to before exec (def no cwd)
+autostart=true                                                       ; start at supervisord start (default: true)
+autorestart=true                                                     ; retstart at unexpected quit (default: true)
+startsecs=22                                                         ; number of secs prog must stay running (def. 1)
+startretries=3                                                       ; max # of serial start failures (default 3)
+exitcodes=0,2                                                        ; 'expected' exit codes for process (default 0,2)
+stopsignal=QUIT                                                      ; signal used to kill process (default TERM)
+stopasgroup=true
+stopwaitsecs=10                                                      ; max num secs to wait b4 SIGKILL (default 10)
+user=root                                                		         ; setuid to this UNIX account to run the program
+redirect_stderr=false                                           		 ; redirect proc stderr to stdout (default false)
+stdout_logfile=/data/logs/kubernetes/kube-proxy/proxy.stdout.log     ; stdout log path, NONE for none; default AUTO
+stdout_logfile_maxbytes=64MB                                    		 ; max # logfile bytes b4 rotation (default 50MB)
+stdout_logfile_backups=4                                        		 ; # of stdout logfile backups (default 10)
+stdout_capture_maxbytes=1MB                                     		 ; number of bytes in 'capturemode' (default 0)
+stdout_events_enabled=false                                     		 ; emit events on stdout writes (default false)
+stderr_logfile=/data/logs/kubernetes/kube-proxy/proxy.stderr.log     ; stderr log path, NONE for none; default AUTO
+stderr_logfile_maxbytes=64MB                                    		 ; max # logfile bytes b4 rotation (default 50MB)
+stderr_logfile_backups=4                                        		 ; # of stderr logfile backups (default 10)
+stderr_capture_maxbytes=1MB   						                           ; number of bytes in 'capturemode' (default 0)
+stderr_events_enabled=false   						                           ; emit events on stderr writes (default false)
+
+
+ubuntu@cyou2-201:/opt/kubernetes/server/bin$ sudo supervisorctl update
+kube-proxy: added process group
+
+ubuntu@cyou2-201:/opt/kubernetes/server/bin$ sudo supervisorctl status
+etcd-server-2-201                RUNNING   pid 1641, uptime 58 days, 1:23:21
+kube-apiserver                   RUNNING   pid 57962, uptime 0:24:47
+kube-controller-manager          RUNNING   pid 58100, uptime 0:16:26
+kube-kubelet                     RUNNING   pid 58099, uptime 0:16:26
+kube-proxy                       STARTING  
+kube-scheduler                   RUNNING   pid 58098, uptime 0:16:26
+
+ubuntu@cyou2-201:/opt/kubernetes/server/bin$ sudo supervisorctl status
+etcd-server-2-201                RUNNING   pid 1641, uptime 58 days, 1:24:01
+kube-apiserver                   RUNNING   pid 57962, uptime 0:25:27
+kube-controller-manager          RUNNING   pid 58100, uptime 0:17:06
+kube-kubelet                     RUNNING   pid 58099, uptime 0:17:06
+kube-proxy                       RUNNING   pid 61982, uptime 0:00:44
+kube-scheduler                   RUNNING   pid 58098, uptime 0:17:06
+
