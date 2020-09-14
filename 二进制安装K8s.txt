@@ -92,8 +92,8 @@ ubuntu@cyou2-203:~$ vi /opt/certs/ca-csr.json
     "names": [
         {
             "C": "CN",
-            "ST": "beijing",
-            "L": "beijing",
+            "ST": "hunan",
+            "L": "changsha",
             "O": "od",
             "OU": "ops"
         }
