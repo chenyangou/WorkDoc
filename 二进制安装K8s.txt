@@ -1146,3 +1146,85 @@ kube-kubelet                     RUNNING   pid 58099, uptime 0:17:06
 kube-proxy                       RUNNING   pid 61982, uptime 0:00:44
 kube-scheduler                   RUNNING   pid 58098, uptime 0:17:06
 
+
+部署Addons插件
+
+部署flannel
+主机：cyou2-201，cyou2-202
+
+各节点上增加iptables规则
+注意：iptables规则各主机略有不同，其他运算节点上执行时注意修改
+
+优化SNAT规则，各运算节点之间的各POD之间的网络通信不再出网
+
+iptables -t nat -D POSTROUTING -s 172.7.201.0/24 ! -o docker0 -j MASQUERADE
+iptables -t nat -I POSTROUTING -s 172.7.201.0/24 ! -d 172.7.0.0/16 ! -o docker0 -j MASQUERADE
+注：192.168.2.201主机上，来源是172.7.201.0/24段的docker的IP，目标IP不是172.7.0.0/16段，网络发包不同docker0桥设备出站，才进行SNAT转换、
+
+
+下载安装包，创建目录
+
+ubuntu@cyou2-201:/opt/src$ cd /opt/src/
+ubuntu@cyou2-201:/opt/src$ wget https://github.com/coreos/flannel/releases/download/v0.11.0/flannel-v0.11.0-linux-amd64.tar.gz
+
+ubuntu@cyou2-201:/opt/src$ sudo mkdir /opt/flannel-v0.11.0
+ubuntu@cyou2-201:/opt/src$ sudo tar -zxxf flannel-v0.11.0-linux-amd64.tar.gz -C /opt/flannel-v0.11.0/
+ubuntu@cyou2-201:/opt/src$ sudo mkdir /opt/flannel-v0.11.0/cert
+ubuntu@cyou2-201:/opt/src$ sudo ln -s /opt/flannel-v0.11.0/ /opt/flannel
+ubuntu@cyou2-201:/opt/src$ sudo mkdir /data/logs/flanneld
+
+拷贝证书：
+ca.pem，client.pem，client-key.pem至/opt/flannel-v0.11.0/cert
+
+ubuntu@cyou2-201:/opt/flannel$ sudo vi subnet.env 
+FLANNEL_NETWORK=172.7.0.0/16
+FLANNEL_SUBNET=172.7.201.1/24
+FLANNEL_MTU=1500
+FLANNEL_IPMASQ=false
+
+创建启动脚本(注意public-ip和iface)：
+ubuntu@cyou2-201:/opt/flannel$ sudo vi flanneld.sh 
+#!/bin/sh
+./flanneld \
+  --public-ip=192.168.2.201 \
+  --etcd-endpoints=https://192.168.2.201:2379,https://192.168.2.202:2379,https://192.168.6.205:2379 \
+  --etcd-keyfile=./cert/client-key.pem \
+  --etcd-certfile=./cert/client.pem \
+  --etcd-cafile=./cert/ca.pem \
+  --iface=ens33 \
+  --subnet-file=./subnet.env \
+  --healthz-port=2401
+
+
+ubuntu@cyou2-201:/opt/flannel$ sudo chmod u+x /opt/flannel/flanneld.sh
+
+
+创建supervisor配置：
+ubuntu@cyou2-201:/opt/flannel$ sudo vi /etc/supervisor/conf.d/flannel.conf 
+[program:flanneld]
+command=/opt/flannel/flanneld.sh                                     ; the program (relative uses PATH, can take args)
+numprocs=1                                                           ; number of processes copies to start (def 1)
+directory=/opt/flannel                                               ; directory to cwd to before exec (def no cwd)
+autostart=true                                                       ; start at supervisord start (default: true)
+autorestart=true                                                     ; retstart at unexpected quit (default: true)
+startsecs=22                                                         ; number of secs prog must stay running (def. 1)
+startretries=3                                                       ; max # of serial start failures (default 3)
+exitcodes=0,2                                                        ; 'expected' exit codes for process (default 0,2)
+stopsignal=QUIT                                                      ; signal used to kill process (default TERM)
+stopasgroup=true
+stopwaitsecs=10                                                      ; max num secs to wait b4 SIGKILL (default 10)
+user=root                                                		         ; setuid to this UNIX account to run the program
+redirect_stderr=true                                             		 ; redirect proc stderr to stdout (default false)
+stdout_logfile=/data/logs/flanneld/flanneld.stdout.log               ; stdout log path, NONE for none; default AUTO
+stdout_logfile_maxbytes=64MB                                    		 ; max # logfile bytes b4 rotation (default 50MB)
+stdout_logfile_backups=4                                        		 ; # of stdout logfile backups (default 10)
+stdout_capture_maxbytes=1MB                                     		 ; number of bytes in 'capturemode' (default 0)
+stdout_events_enabled=false                                     		 ; emit events on stdout writes (default false)
+
+
+
+操作etcd，增加host-gw，只需要做一次
+ubuntu@cyou2-201:/opt/flannel$ sudo /opt/etcd/etcdctl set /coreos.com/network/config '{"Network": "172.6.0.0/16", "Backend": {"Type": "host-gw"}}' 
+{"Network": "172.6.0.0/16", "Backend": {"Type": "host-gw"}}
+ubuntu@cyou2-201:/opt/flannel$ sudo /opt/etcd/etcdctl get /coreos.com/network/config
+{"Network": "172.6.0.0/16", "Backend": {"Type": "host-gw"}}
