@@ -1102,7 +1102,10 @@ ubuntu@cyou2-201:/opt/kubernetes/server/bin$ sudo vi  kube-proxy-2201.sh
 ./kube-proxy \
   --cluster-cidr 10.4.0.0/16 \
   --hostname-override 192.168.2.201 \
-  --kubeconfig ./conf/kube-proxy.kubeconfig
+  --kubeconfig ./conf/kube-proxy.kubeconfig \
+  --proxy-mode=ipvs \
+  --ipvs-scheduler=nq
+
 
 
 ubuntu18系统,安装kube-proxy节点上运行，开启ipvs4转发，并加载ipvs模块
