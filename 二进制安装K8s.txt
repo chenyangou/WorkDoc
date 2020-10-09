@@ -860,7 +860,7 @@ ubuntu@cyou2-201:/opt/kubernetes/server/bin/conf$ sudo kubectl config use-contex
 Switched to context "myk8s-context".
 
 
-角色绑定：（）
+角色绑定：
 ubuntu@cyou2-201:/opt/kubernetes/server/bin/conf$ vi /opt/kubernetes/server/bin/conf/k8s-node.yaml
 
 apiVersion: rbac.authorization.k8s.io/v1
