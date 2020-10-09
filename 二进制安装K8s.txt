@@ -1101,7 +1101,7 @@ ubuntu@cyou2-201:/opt/kubernetes/server/bin$ sudo vi  kube-proxy-2201.sh
 #!/bin/sh
 ./kube-proxy \
   --cluster-cidr 10.4.0.0/16 \
-  --hostname-override 192.168.2.201 \
+  --hostname-override cyou2-201.host.com \
   --kubeconfig ./conf/kube-proxy.kubeconfig \
   --proxy-mode=ipvs \
   --ipvs-scheduler=nq
@@ -1928,3 +1928,193 @@ dashboard	A	192.168.2.200	# 添加
 dig -t A dashboard.cyou.com @192.168.2.204 +short
 
 浏览器访问dashboard.cyou.com
+
+配置认证
+1、签发证书
+ubuntu@cyou2-203:/opt/certs$ (umask 077;sudo openssl genrsa -out dashboard.cyou.com.key 2048)
+[sudo] password for ubuntu: 
+Generating RSA private key, 2048 bit long modulus (2 primes)
+...................................................................................................................................................................+++++
+...................+++++
+e is 65537 (0x010001)
+ubuntu@cyou2-203:/opt/certs$ openssl req -new -key dashboard.cyou.com.key -out dashboard.cyou.com.csr -subj "/CN=dashboard.cyou.com/C=CN/ST=hunan/L=changsha/O=cyou/OU=ops"
+Can't open dashboard.cyou.com.key for reading, Permission denied
+139850974073280:error:0200100D:system library:fopen:Permission denied:../crypto/bio/bss_file.c:72:fopen('dashboard.cyou.com.key','r')
+139850974073280:error:2006D002:BIO routines:BIO_new_file:system lib:../crypto/bio/bss_file.c:81:
+unable to load Private Key
+ubuntu@cyou2-203:/opt/certs$ sudo openssl req -new -key dashboard.cyou.com.key -out dashboard.cyou.com.csr -subj "/CN=dashboard.cyou.com/C=CN/ST=hunan/L=changsha/O=cyou/OU=ops"
+Can't load /home/ubuntu/.rnd into RNG
+140534273884608:error:2406F079:random number generator:RAND_load_file:Cannot open file:../crypto/rand/randfile.c:88:Filename=/home/ubuntu/.rnd
+ubuntu@cyou2-203:/opt/certs$ echo $?
+0
+ubuntu@cyou2-203:/opt/certs$ sudo openssl x509 -req -in dashboard.cyou.com.csr -CA ca.pem -CAKey ca-key.pem -CAcreateserial -out dashboard.cyou.com.crt -days 3650
+x509: Unrecognized flag CAKey
+x509: Use -help for summary.
+ubuntu@cyou2-203:/opt/certs$ sudo openssl x509 -req -in dashboard.cyou.com.csr -CA ca.pem -CAkey ca-key.pem -CAcreateserial -out dashboard.cyou.com.crt -days 3650
+Signature ok
+subject=CN = dashboard.cyou.com, C = CN, ST = hunan, L = changsha, O = cyou, OU = ops
+Getting CA Private Key
+ubuntu@cyou2-203:/opt/certs$ ll dash*
+-rw-r--r-- 1 root root 1216 10月  9 09:34 dashboard.cyou.com.crt
+-rw-r--r-- 1 root root 1009 10月  9 09:32 dashboard.cyou.com.csr
+-rw------- 1 root root 1679 10月  9 09:30 dashboard.cyou.com.key
+
+2、检查证书
+ubuntu@cyou2-203:/opt/certs$ cfssl-certinfo -cert dashboard.cyou.com.crt 
+{
+  "subject": {
+    "common_name": "dashboard.cyou.com",
+    "country": "CN",
+    "organization": "cyou",
+    "organizational_unit": "ops",
+    "locality": "changsha",
+    "province": "hunan",
+    "names": [
+      "dashboard.cyou.com",
+      "CN",
+      "hunan",
+      "changsha",
+      "cyou",
+      "ops"
+    ]
+  },
+  "issuer": {
+    "common_name": "kubernetes-ca",
+    "country": "CN",
+    "organization": "cyou",
+    "organizational_unit": "ops",
+    "locality": "changsha",
+    "province": "hunan",
+    "names": [
+      "CN",
+      "hunan",
+      "changsha",
+      "cyou",
+      "ops",
+      "kubernetes-ca"
+    ]
+  },
+  "serial_number": "27327185264994118708734401483823848786702919819",
+  "not_before": "2020-10-09T01:34:10Z",
+  "not_after": "2030-10-07T01:34:10Z",
+  "sigalg": "SHA256WithRSA",
+  "authority_key_id": "",
+  "subject_key_id": "",
+  "pem": "-----BEGIN CERTIFICATE-----\nMIIDVjCCAj4CFATJZLPB1vs9tCt9ZVm81ZSQXGiLMA0GCSqGSIb3DQEBCwUAMGUx\nCzAJBgNVBAYTAkNOMQ4wDAYDVQQIEwVodW5hbjERMA8GA1UEBxMIY2hhbmdzaGEx\nDTALBgNVBAoTBGN5b3UxDDAKBgNVBAsTA29wczEWMBQGA1UEAxMNa3ViZXJuZXRl\ncy1jYTAeFw0yMDEwMDkwMTM0MTBaFw0zMDEwMDcwMTM0MTBaMGoxGzAZBgNVBAMM\nEmRhc2hib2FyZC5jeW91LmNvbTELMAkGA1UEBhMCQ04xDjAMBgNVBAgMBWh1bmFu\nMREwDwYDVQQHDAhjaGFuZ3NoYTENMAsGA1UECgwEY3lvdTEMMAoGA1UECwwDb3Bz\nMIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAwUPboZ4KErlKmRqL2kmH\nTNIL6FGxUXI5NpRJZqWqwMI13m8yVATHW18CjKWzmelsDmxfMQH9sj++3rQD2StO\nGf+kuLuVd9uTuy2Y2KPWu6Ptz6lb83Y0dDd6y5duirjXFeFXPisf1WVmFlDLsdDQ\nJB8GbBPxE+1b4tCsZM7WpGDNgIdlib9ONrnmlMu44w9s/HGGDCYa3cuqMJ4rF8cL\n+5LpE6tOfRykAUihujUWxYZAMH/HdTTczmIG1xK7UrabR4dEUmzRmX4L+UHEo81c\nb1hqNF9S23v0wd5nlW4WKw1gLlc74ZduVbygbpXLsFeWXxckCn1vQX0zmL2t+DtA\nwwIDAQABMA0GCSqGSIb3DQEBCwUAA4IBAQBOE1aP0VnsBoJS0Ugq1YxvaOvR00Iw\ndkXQsvzzM2Tup4vE3tjJNtMTrO4+nsS1X+YJNQ1bSMwnyMuGVEelMGTnVdBaKkNO\ne6mcyN1S24TO4w1P9Tn+dwcHHxJsaZlYGVYoh66951Dy4mvuxSO2axlOhV8hoPzW\nu4adBxkWm/pP3bTvFxtWL00fjpQ99EJSyUkwiGy7EyNWukaNBKeKxnA4CohDi6wZ\nnrEx5qzDtJrnZFbmH7trnlxOXqrnh4xx0H3wC0fAJaM0XtpwlytKmvwF+L6dh6rh\nsG9OI17ADbj0UlyFc28BG+8kQ09C7ZF4WiAhF19NH8gl+Ts/m3M30tDB\n-----END CERTIFICATE-----\n"
+}
+
+
+配置nginx
+在两个代理节点上，创建目录/etc/nginx/certs/用来存放证书dashboard.cyou.com.crt和dashboard.cyou.com.key
+
+ubuntu@cyou2-204:/etc/nginx/conf.d$ sudo vi dashboard.cyou.com.conf 
+server {
+    listen       80;
+    server_name  dashboard.cyou.com;
+
+    rewrite ^(.*)$ https://${server_name}$1 permanent;
+}
+server {
+    listen       443 ssl;
+    server_name  dashboard.cyou.com;
+
+    ssl_certificate "certs/dashboard.cyou.com.crt";
+    ssl_certificate_key "certs/dashboard.cyou.com.key";
+    ssl_session_cache shared:SSL:1m;
+    ssl_session_timeout  10m;
+    ssl_ciphers HIGH:!aNULL:!MD5;
+    ssl_prefer_server_ciphers on;
+
+    location / {
+        proxy_pass http://default_backend_traefik;
+        proxy_set_header Host       $http_host;
+        proxy_set_header x-forwarded-for $proxy_add_x_forwarded_for;
+    }
+}
+
+
+获取kubernetes-dashboard-admin-token
+
+ubuntu@cyou2-201:~$ kubectl get secrets -n kube-system
+NAME                                     TYPE                                  DATA   AGE
+coredns-token-87wfp                      kubernetes.io/service-account-token   3      16d
+default-token-j4bhw                      kubernetes.io/service-account-token   3      92d
+heapster-token-wg8zq                     kubernetes.io/service-account-token   3      16h
+kubernetes-dashboard-admin-token-8zn8d   kubernetes.io/service-account-token   3      16d
+kubernetes-dashboard-certs               Opaque                                0      2d19h
+kubernetes-dashboard-key-holder          Opaque                                2      2d19h
+traefik-ingress-controller-token-dbxt2   kubernetes.io/service-account-token   3      16d
+ubuntu@cyou2-201:~$ kubectl describe secret kubernetes-dashboard-admin-token-8zn8d -n kube-system
+Name:         kubernetes-dashboard-admin-token-8zn8d
+Namespace:    kube-system
+Labels:       <none>
+Annotations:  kubernetes.io/service-account.name: kubernetes-dashboard-admin
+              kubernetes.io/service-account.uid: 7b16171e-ece6-4142-ac9a-3a8f16fe24f7
+
+Type:  kubernetes.io/service-account-token
+
+Data
+====
+ca.crt:     1359 bytes
+namespace:  11 bytes
+token:      eyJhbGciOiJSUzI1NiIsImtpZCI6IiJ9.eyJpc3MiOiJrdWJlcm5ldGVzL3NlcnZpY2VhY2NvdW50Iiwia3ViZXJuZXRlcy5pby9zZXJ2aWNlYWNjb3VudC9uYW1lc3BhY2UiOiJrdWJlLXN5c3RlbSIsImt1YmVybmV0ZXMuaW8vc2VydmljZWFjY291bnQvc2VjcmV0Lm5hbWUiOiJrdWJlcm5ldGVzLWRhc2hib2FyZC1hZG1pbi10b2tlbi04em44ZCIsImt1YmVybmV0ZXMuaW8vc2VydmljZWFjY291bnQvc2VydmljZS1hY2NvdW50Lm5hbWUiOiJrdWJlcm5ldGVzLWRhc2hib2FyZC1hZG1pbiIsImt1YmVybmV0ZXMuaW8vc2VydmljZWFjY291bnQvc2VydmljZS1hY2NvdW50LnVpZCI6IjdiMTYxNzFlLWVjZTYtNDE0Mi1hYzlhLTNhOGYxNmZlMjRmNyIsInN1YiI6InN5c3RlbTpzZXJ2aWNlYWNjb3VudDprdWJlLXN5c3RlbTprdWJlcm5ldGVzLWRhc2hib2FyZC1hZG1pbiJ9.ljtpdIwIlRslPMvprKGEhOEoCOEluqeHQPrkh0SI5cttvpcfMYF0vRhgg6GmHDZKLLAM48vz-ESKKM1Xo4n_XBJtReXRg2_zjEFgh9rhHpOB-eoAyQeel9xjGaCSnR5h5o6CsEsktHnpHs6iBw89pFb1d5wIiyYkPsZfDzbDnq9wOkEmJMmY8VxqK7pstV1prLrIGlf02uTDpzT3Wp4xgihOqX1fxV9yelBpdKvcrK_N9LyVUD9A7Wj_xHL7HcHhHG5S1NoFzriaXl8CZrJpoNETcJnU6mGJh2uY9XGrGFuQ6vp4KJjRDNWldGI7q6S19T7uaPTtJ_meS0fKH5Y69A
+
+
+验证token登录
+
+
+
+
+
+
+
+
+
+
+K8S平滑升级(每个节点上相同的操作)
+v1.15.4-v1.15.2
+1、检查机器上pod数量决定先升级哪台机器
+ubuntu@cyou2-201:~$ kubectl get all -n kube-system -o wide
+
+2、在负载均衡禁用7层和4层，升级哪一台就注释哪一台，分别在两个代理节点上操作
+
+3、摘除node节点
+ubuntu@cyou2-201:~$ kubectl delete node cyou2-201.host.com
+ubuntu@cyou2-201:~$ kubectl get node
+
+4、检查pod运行情况和dns
+kubectl get all -n kube-system -o wide
+dig -t A kubernetes.default.svc.cluster.local @10.4.0.2 +short
+
+5、开始升级，准备好包，证书，配置文件，启动脚本
+ubuntu@cyou2-201:/opt/kubernetes-v1.15.2/server/bin$ sudo cp -r /opt/kubernetes/server/bin/cert .
+ubuntu@cyou2-201:/opt/kubernetes-v1.15.2/server/bin$ sudo cp -r /opt/kubernetes/server/bin/conf .
+ubuntu@cyou2-201:/opt/kubernetes-v1.15.2/server/bin$ sudo cp -r /opt/kubernetes/server/bin/*.sh .
+ubuntu@cyou2-201:/opt$ sudo rm -rf kubernetes
+ubuntu@cyou2-201:/opt$ sudo ln -s kubernetes-v1.15.2/ kubernetes
+
+ubuntu@cyou2-201:/opt$ sudo supervisorctl status
+etcd-server-2-201                STOPPED   Oct 09 11:27 AM
+flanneld                         STOPPED   Oct 09 11:27 AM
+kube-apiserver                   STOPPED   Oct 09 11:27 AM
+kube-controller-manager          STOPPED   Oct 09 11:27 AM
+kube-kubelet                     STOPPED   Oct 09 11:27 AM
+kube-proxy                       STOPPED   Oct 09 11:27 AM
+kube-scheduler                   STOPPED   Oct 09 11:27 AM
+
+# 启动进程应该按照顺序一个个启动。
+ubuntu@cyou2-201:/opt$ sudo supervisorctl start all
+kube-scheduler: started
+flanneld: started
+kube-apiserver: started
+kube-kubelet: started
+etcd-server-2-201: started
+kube-controller-manager: started
+kube-proxy: started
+
+ubuntu@cyou2-201:~$ kubectl get node
+NAME                 STATUS   ROLES         AGE   VERSION
+cyou2-201.host.com   Ready    <none>        15m   v1.15.2
+cyou2-202.host.com   Ready    <none>        13m   v1.15.4
+
+
