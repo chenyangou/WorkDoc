@@ -1,0 +1,101 @@
+K8S自1.6版本起默认使用基于角色的访问控制(RBAC)，相对于属性的访问控制(ABAC)
+权限，账户，角色，绑定角色均为资源
+    权限：
+        读get
+        写wirte
+        更新update
+        查看list
+        监视watch
+    账户：
+        用户账户(useraccount)
+            典型应用就是kubelet启动时创建了一个kubeconfig(users字段中的name)配置文件，为用户账户配置文件。
+        服务账户(serviceaccount)
+            所有的pod运行都必须有一个服务账户
+    角色：定义角色的同时，赋予权限
+        Role普通角色，只能应用在特定的名称空间下
+        ClusterRole集群角色，整个集群
+    绑定角色：
+        RoleBinding
+        ClusterRoelBindding
+K8S无法直接赋予账户权限，需给账户绑定相应的角色，然后给相对应的角色赋予权限
+    账户-->角色-->权限
+
+三步走：创建账户(分为用户账户和服务账户)，创建角色并分配角色，账户和角色绑定
+
+kubectl get clusterrole查看集群角色
+ubuntu@cyou2-201:~$ kubectl get clusterrole cluster-admin -o yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  annotations:
+    rbac.authorization.kubernetes.io/autoupdate: "true"
+  creationTimestamp: "2020-07-07T15:02:41Z"
+  labels:
+    kubernetes.io/bootstrapping: rbac-defaults
+  name: cluster-admin
+  resourceVersion: "40"
+  selfLink: /apis/rbac.authorization.k8s.io/v1/clusterroles/cluster-admin
+  uid: a66007cf-d0fe-42a2-93ae-32515cd2587a
+rules:
+- apiGroups:
+  - '*'
+  resources:
+  - '*'
+  verbs:
+  - '*'
+- nonResourceURLs:
+  - '*'
+  verbs:
+  - '*'
+
+
+
+Demo：
+
+apiVersion: v1
+# 服务账户
+kind: ServiceAccount
+metadata:
+  name: traefik-ingress-controller
+  namespace: kube-system
+
+---
+apiVersion: rbac.authorization.k8s.io/v1beta1
+# 定义角色赋予权限
+kind: ClusterRole
+metadata:
+  name: traefik-ingress-controller
+rules:
+  - apiGroups:
+      - ""
+    resources:
+      - services
+      - endpoints
+      - secrets
+    verbs:
+      - get
+      - list
+      - watch
+  - apiGroups:
+      - extensions
+    resources:
+      - ingresses
+    verbs:
+      - get
+      - list
+      - watch
+
+---
+# 绑定角色
+kind: ClusterRoleBinding
+apiVersion: rbac.authorization.k8s.io/v1beta1
+metadata:
+  name: traefik-ingress-controller
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: traefik-ingress-controller
+subjects:
+- kind: ServiceAccount
+  name: traefik-ingress-controller
+  namespace: kube-system
