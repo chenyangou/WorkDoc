@@ -308,8 +308,8 @@ spec:
 
 
 所有运算节点上
-mount -o remount,rw /sys/fs/cgroup/
-ln -s /sys/fs/cgroup/cpu,cpuacct /sys/fs/cgroup/cpuacct,cpu
+sudo mount -o remount,rw /sys/fs/cgroup/
+sudo ln -s /sys/fs/cgroup/cpu,cpuacct /sys/fs/cgroup/cpuacct,cpu
 
 
 应用资源配置清单
