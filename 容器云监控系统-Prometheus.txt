@@ -1037,7 +1037,86 @@ ubuntu@cyou2-204:~$ sudo service bind9 reload
 ubuntu@cyou2-204:~$ dig -t A grafana.cyou.com @192.168.2.204 +short
 浏览器访问grafana.cyou.com
 
+设置主题
+Configuration -> Preferences
 
+UI Theme:Light
+Home Dashboard:Default
+Timezone:Local browser time
+
+安装插件
+Configuration -> Plugins
+
+Kubernetes App
+安装方法一：
+grafana-cli plugins install grafana-kubernetes-app
+安装方法二：
+[root@shkf6-245 ~]# cd /data/nfs-volume/grafana/plugins
+[root@shkf6-245 plugins]# wget https://grafana.com/api/plugins/grafana-kubernetes-app/versions/1.0.1/download -O grafana-kubernetes-app.zip
+[root@shkf6-245 plugins]# unzip grafana-kubernetes-app.zip
+
+Clock Pannel
+安装方法一：
+grafana-cli plugins install grafana-clock-panel
+安装方法二：
+https://grafana.com/api/plugins/grafana-clock-panel/versions/1.0.2/download
+
+Pie Chart
+安装方法一：
+grafana-cli plugins install grafana-piechart-panel
+安装方法二：
+https://grafana.com/api/plugins/grafana-piechart-panel/versions/1.3.6/download
+
+D3 Gauge
+安装方法一：
+grafana-cli plugins install briangann-gauge-panel
+安装方法二：
+https://grafana.com/api/plugins/briangann-gauge-panel/versions/0.0.6/download
+
+Discrete
+安装方法一：
+grafana-cli plugins install natel-discrete-panel
+安装方法二：
+https://grafana.com/api/plugins/natel-discrete-panel/versions/0.0.9/download
+
+重启grafana的pod
+依次enable插件
+
+配置grafana数据源
+Configuration -> Data Sources
+选择prometheus
+
+HTTP
+key	value
+URL	http://prometheus.cyou.com
+Access	Server(Default)
+Auth
+
+选择
+TLS Auth Details
+With CA  Cert
+将证书复制到对应的框中
+
+
+配置Kubernetes集群Dashboard
+Configuration -> pligins -> Kubernetes -> Enable
+
+kubernetes -> +New Cluster
+
+Name	myk8s
+URL	https://192.168.6.66:7443
+Access	Server(Default)
+
+TLS Client Auth	勾选
+With Ca Cert	勾选
+
+将ca.pem、client.pem和client-key.pem粘贴至文本框内
+
+Datasource	Prometheus
+
+注意：
+K8S Container中，所有Pannel的
+pod_name -> container_label_io_kubernetes_pod_name
 
 
 
