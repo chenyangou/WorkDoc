@@ -1,0 +1,1056 @@
+
+
+
+
+准备镜像
+
+ubuntu@cyou2-203:~$ docker pull quay.io/coreos/kube-state-metrics:v1.5.0
+ubuntu@cyou2-203:/data/k8s-yaml$ docker images| grep kube-state-metrics
+ubuntu@cyou2-203:/data/k8s-yaml$ docker tag 91599517197a harbor.cyou.com/public/kube-state-metrics:v1.5.0
+ubuntu@cyou2-203:/data/k8s-yaml$ docker push harbor.cyou.com/public/kube-state-metrics:v1.5.0
+
+
+准备资源配置清单
+ubuntu@cyou2-203:/data/k8s-yaml/kube-state-metrics$ ls
+dp.yaml  rbac.yaml
+
+ubuntu@cyou2-203:/data/k8s-yaml/kube-state-metrics$ sudo vi rbac.yaml
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  labels:
+    addonmanager.kubernetes.io/mode: Reconcile
+    kubernetes.io/cluster-service: "true"
+  name: kube-state-metrics
+  namespace: kube-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  labels:
+    addonmanager.kubernetes.io/mode: Reconcile
+    kubernetes.io/cluster-service: "true"
+  name: kube-state-metrics
+rules:
+- apiGroups:
+  - ""
+  resources:
+  - configmaps
+  - secrets
+  - nodes
+  - pods
+  - services
+  - resourcequotas
+  - replicationcontrollers
+  - limitranges
+  - persistentvolumeclaims
+  - persistentvolumes
+  - namespaces
+  - endpoints
+  verbs:
+  - list
+  - watch
+- apiGroups:
+  - policy
+  resources:
+  - poddisruptionbudgets
+  verbs:
+  - list
+  - watch
+- apiGroups:
+  - extensions
+  resources:
+  - daemonsets
+  - deployments
+  - replicasets
+  verbs:
+  - list
+  - watch
+- apiGroups:
+  - apps
+  resources:
+  - statefulsets
+  verbs:
+  - list
+  - watch
+- apiGroups:
+  - batch
+  resources:
+  - cronjobs
+  - jobs
+  verbs:
+  - list
+  - watch
+- apiGroups:
+  - autoscaling
+  resources:
+  - horizontalpodautoscalers
+  verbs:
+  - list
+  - watch
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  labels:
+    addonmanager.kubernetes.io/mode: Reconcile
+    kubernetes.io/cluster-service: "true"
+  name: kube-state-metrics
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: kube-state-metrics
+subjects:
+- kind: ServiceAccount
+  name: kube-state-metrics
+  namespace: kube-system
+
+ubuntu@cyou2-203:/data/k8s-yaml/kube-state-metrics$ sudo vi dp.yaml 
+apiVersion: extensions/v1beta1
+kind: Deployment
+metadata:
+  annotations:
+    deployment.kubernetes.io/revision: "2"
+  labels:
+    grafanak8sapp: "true"
+    app: kube-state-metrics
+  name: kube-state-metrics
+  namespace: kube-system
+spec:
+  selector:
+    matchLabels:
+      grafanak8sapp: "true"
+      app: kube-state-metrics
+  strategy:
+    rollingUpdate:
+      maxSurge: 25%
+      maxUnavailable: 25%
+    type: RollingUpdate
+  template:
+    metadata:
+      labels:
+        grafanak8sapp: "true"
+        app: kube-state-metrics
+    spec:
+      containers:
+      - name: kube-state-metrics
+        image: harbor.cyou.com/public/kube-state-metrics:v1.5.0
+        imagePullPolicy: IfNotPresent
+        ports:
+        - containerPort: 8080
+          name: http-metrics
+          protocol: TCP
+        readinessProbe:
+          failureThreshold: 3
+          httpGet:
+            path: /healthz
+            port: 8080
+            scheme: HTTP
+          initialDelaySeconds: 5
+          periodSeconds: 10
+          successThreshold: 1
+          timeoutSeconds: 5
+      serviceAccountName: kube-state-metrics
+
+
+应用资源配置清单
+ubuntu@cyou2-201:~$ kubectl apply -f http://k8s-yaml.cyou.com/kube-state-metrics/rbac.yaml
+ubuntu@cyou2-201:~$ kubectl apply -f http://k8s-yaml.cyou.com/kube-state-metrics/dp.yaml
+
+ubuntu@cyou2-201:~$ kubectl get pods -n kube-system -o wide
+kube-state-metrics-6d7cf4ddbc-rjp2c     1/1     Running   0          22h   172.7.202.4     cyou2-202.host.com   <none>           <none>
+
+ubuntu@cyou2-201:~$ curl 172.7.202.4:8080/healthz
+ok
+
+
+准备镜像
+
+ubuntu@cyou2-203:~$ docker pull prom/node-exporter:v0.15.0
+ubuntu@cyou2-203:~$ docker images|grep node-exporter
+ubuntu@cyou2-203:~$ docker tag 12d51ffa2b22 harbor.cyou.com/public/node-exporter:v0.15.0
+ubuntu@cyou2-203:~$ docker push harbor.cyou.com/public/node-exporter:v0.15.0
+准备资源配置清单
+ubuntu@cyou2-203:/data/k8s-yaml/node-exporter$ ls
+ds.yaml
+ubuntu@cyou2-203:/data/k8s-yaml/node-exporter$ sudo vi ds.yaml 
+
+kind: DaemonSet
+apiVersion: extensions/v1beta1
+metadata:
+  name: node-exporter
+  namespace: kube-system
+  labels:
+    daemon: "node-exporter"
+    grafanak8sapp: "true"
+spec:
+  selector:
+    matchLabels:
+      daemon: "node-exporter"
+      grafanak8sapp: "true"
+  template:
+    metadata:
+      name: node-exporter
+      labels:
+        daemon: "node-exporter"
+        grafanak8sapp: "true"
+    spec:
+      volumes:
+      - name: proc
+        hostPath: 
+          path: /proc
+          type: ""
+      - name: sys
+        hostPath:
+          path: /sys
+          type: ""
+      containers:
+      - name: node-exporter
+        image: harbor.cyou.com/public/node-exporter:v0.15.0
+        imagePullPolicy: IfNotPresent
+        args:
+        - --path.procfs=/host_proc
+        - --path.sysfs=/host_sys
+        ports:
+        - name: node-exporter
+          hostPort: 9100
+          containerPort: 9100
+          protocol: TCP
+        volumeMounts:
+        - name: sys
+          readOnly: true
+          mountPath: /host_sys
+        - name: proc
+          readOnly: true
+          mountPath: /host_proc
+      hostNetwork: true
+
+应用资源配置清单
+ubuntu@cyou2-201:~$ kubectl apply -f http://k8s-yaml.cyou.com/node-exporter/ds.yaml
+ubuntu@cyou2-201:~$ netstat -lntup|grep 9100
+tcp6       0      0 :::9100                 :::*                    LISTEN      25846/node_exporter
+ubuntu@cyou2-201:~$ curl localhost:9100/metrics
+
+
+准备镜像
+
+ubuntu@cyou2-203:~$ docker pull google/cadvisor:v0.28.3
+ubuntu@cyou2-203:~$ docker images |grep cadvisor
+ubuntu@cyou2-203:~$ docker tag 75f88e3ec333 harbor.cyou.com/public/cadvisor:v0.28.3
+ubuntu@cyou2-203:~$ docker push harbor.cyou.com/public/cadvisor:v0.28.3
+准备资源配置清单
+ubuntu@cyou2-203:/data/k8s-yaml/cadvisor$ ls
+ds.yaml
+ubuntu@cyou2-203:/data/k8s-yaml/cadvisor$ sudo vi ds.yaml 
+
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: cadvisor
+  namespace: kube-system
+  labels:
+    app: cadvisor
+spec:
+  selector:
+    matchLabels:
+      name: cadvisor
+  template:
+    metadata:
+      labels:
+        name: cadvisor
+    spec:
+      hostNetwork: true
+      tolerations:
+      - key: node-role.kubernetes.io/master
+        effect: NoSchedule
+      containers:
+      - name: cadvisor
+        image: harbor.cyou.com/public/cadvisor:v0.28.3
+        imagePullPolicy: IfNotPresent
+        volumeMounts:
+        - name: rootfs
+          mountPath: /rootfs
+          readOnly: true
+        - name: var-run
+          mountPath: /var/run
+        - name: sys
+          mountPath: /sys
+          readOnly: true
+        - name: docker
+          mountPath: /var/lib/docker
+          readOnly: true
+        ports:
+          - name: http
+            containerPort: 4194
+            protocol: TCP
+        readinessProbe:
+          tcpSocket:
+            port: 4194
+          initialDelaySeconds: 5
+          periodSeconds: 10
+        args:
+          - --housekeeping_interval=10s
+          - --port=4194
+      terminationGracePeriodSeconds: 30
+      volumes:
+      - name: rootfs
+        hostPath:
+          path: /
+      - name: var-run
+        hostPath:
+          path: /var/run
+      - name: sys
+        hostPath:
+          path: /sys
+      - name: docker
+        hostPath:
+          path: /data/docker
+
+
+所有运算节点上
+mount -o remount,rw /sys/fs/cgroup/
+ln -s /sys/fs/cgroup/cpu,cpuacct /sys/fs/cgroup/cpuacct,cpu
+
+
+应用资源配置清单
+ubuntu@cyou2-201:~$ kubectl apply -f http://k8s-yaml.cyou.com/cadvisor/ds.yaml
+ubuntu@cyou2-201:~$ sudo netstat -luntp|grep 4194
+tcp6       0      0 :::4194                 :::*                    LISTEN      18027/cadvisor 
+
+
+准备镜像
+
+ubuntu@cyou2-203:~$ docker pull prom/blackbox-exporter:v0.15.1
+ubuntu@cyou2-203:~$ docker images|grep blackbox
+ubuntu@cyou2-203:~$ docker tag 81b70b6158be harbor.cyou.com/public/blackbox-exporter:v0.15.1
+ubuntu@cyou2-203:~$ docker push harbor.cyou.com/public/blackbox-exporter:v0.15.1
+准备资源配置清单
+ubuntu@cyou2-203:/data/k8s-yaml/blackbox-exporter$ ls
+cm.yaml  dp.yaml  ingress.yaml  service.yaml
+
+ubuntu@cyou2-203:/data/k8s-yaml/blackbox-exporter$ sudo vi cm.yaml 
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  labels:
+    app: blackbox-exporter
+  name: blackbox-exporter
+  namespace: kube-system
+data:
+  blackbox.yml: |-
+    modules:
+      http_2xx:
+        prober: http
+        timeout: 2s
+        http:
+          valid_http_versions: ["HTTP/1.1", "HTTP/2"]
+          valid_status_codes: [200,301,302]
+          method: GET
+          preferred_ip_protocol: "ip4"
+      tcp_connect:
+        prober: tcp
+        timeout: 2s
+
+ubuntu@cyou2-203:/data/k8s-yaml/blackbox-exporter$ sudo vi dp.yaml 
+kind: Deployment
+apiVersion: extensions/v1beta1
+metadata:
+  name: blackbox-exporter
+  namespace: kube-system
+  labels:
+    app: blackbox-exporter
+  annotations:
+    deployment.kubernetes.io/revision: 1
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: blackbox-exporter
+  template:
+    metadata:
+      labels:
+        app: blackbox-exporter
+    spec:
+      volumes:
+      - name: config
+        configMap:
+          name: blackbox-exporter
+          defaultMode: 420
+      containers:
+      - name: blackbox-exporter
+        image: harbor.cyou.com/public/blackbox-exporter:v0.15.1
+        imagePullPolicy: IfNotPresent
+        args:
+        - --config.file=/etc/blackbox_exporter/blackbox.yml
+        - --log.level=info
+        - --web.listen-address=:9115
+        ports:
+        - name: blackbox-port
+          containerPort: 9115
+          protocol: TCP
+        resources:
+          limits:
+            cpu: 200m
+            memory: 256Mi
+          requests:
+            cpu: 100m
+            memory: 50Mi
+        volumeMounts:
+        - name: config
+          mountPath: /etc/blackbox_exporter
+        readinessProbe:
+          tcpSocket:
+            port: 9115
+          initialDelaySeconds: 5
+          timeoutSeconds: 5
+          periodSeconds: 10
+          successThreshold: 1
+          failureThreshold: 3
+
+ubuntu@cyou2-203:/data/k8s-yaml/blackbox-exporter$ sudo vi service.yaml 
+kind: Service
+apiVersion: v1
+metadata:
+  name: blackbox-exporter
+  namespace: kube-system
+spec:
+  selector:
+    app: blackbox-exporter
+  ports:
+    - name: blackbox-port
+      protocol: TCP
+      port: 9115
+
+ubuntu@cyou2-203:/data/k8s-yaml/blackbox-exporter$ sudo vi ingress.yaml 
+apiVersion: extensions/v1beta1
+kind: Ingress
+metadata:
+  name: blackbox-exporter
+  namespace: kube-system
+spec:
+  rules:
+  - host: blackbox.cyou.com
+    http:
+      paths:
+      - path: /
+        backend:
+          serviceName: blackbox-exporter
+          servicePort: blackbox-port
+
+应用资源配置清单
+ubuntu@cyou2-201:~$ kubectl apply -f http://k8s-yaml.cyou.com/blackbox-exporter/cm.yaml
+ubuntu@cyou2-201:~$ kubectl apply -f http://k8s-yaml.cyou.com/blackbox-exporter/dp.yaml
+ubuntu@cyou2-201:~$ kubectl apply -f http://k8s-yaml.cyou.com/blackbox-exporter/service.yaml
+ubuntu@cyou2-201:~$ kubectl apply -f http://k8s-yaml.cyou.com/blackbox-exporter/ingress.yaml
+
+配置内网域名解析
+ubuntu@cyou2-204:~$ sudo vi /etc/bind/zones/db.cyou.com 
+;
+; BIND data file for local loopback interface
+;
+$ORIGIN cyou.com.
+$TTL	600 ; 10 minute
+@	IN	SOA	dns.cyou.com. dnsadmin.cyou.com. (
+			      8         ; Serial
+			 604800		; Refresh
+			  86400		; Retry
+			2419200		; Expire
+			 604800 )	; Negative Cache TTL
+		NS	dns.cyou.com.
+$TTL 60 ; 1 minute
+dns		A	192.168.2.204
+harbor		A	192.168.2.203
+k8s-yaml	A	192.168.2.203	
+traefik		A	192.168.2.200	
+dashboard	A	192.168.2.200	
+blackbox	A	192.168.2.200  #添加
+
+ubuntu@cyou2-204:~$ sudo service bind9 reload
+ubuntu@cyou2-204:~$ dig -t A blackbox.cyou.com @192.168.2.204 +short
+浏览器访问blackbox.cyou.com
+
+
+在harboar仓库中创建私有仓库infra
+ubuntu@cyou2-201:~$ kubectl create ns infra
+ubuntu@cyou2-203:~$ kubectl create srects docker-registry harbor --docker-server=harbor.cyou.com --docker-username=admin --docker-password=Harbor12345 -n infra
+secret/harbor created
+
+准备镜像
+ubuntu@cyou2-203:~$ docker pull prom/prometheus:v2.14.0
+ubuntu@cyou2-203:~$ docker images |grep prometheus
+ubuntu@cyou2-203:~$ docker tag 7317640d555e harbor.cyou.com/infra/prometheus:v2.12.0
+ubuntu@cyou2-203:~$ docker push harbor.cyou.com/infra/prometheus:v2.12.0
+
+准备资源配置清单
+ubuntu@cyou2-203:/data/k8s-yaml/prometheus$ ls
+dp.yaml  ingress.yaml  rbac.yaml  service.yaml
+
+ubuntu@cyou2-203:/data/k8s-yaml/prometheus$ sudo vi rbac.yaml 
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  labels:
+    addonmanager.kubernetes.io/mode: Reconcile
+    kubernetes.io/cluster-service: "true"
+  name: prometheus
+  namespace: infra
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  labels:
+    addonmanager.kubernetes.io/mode: Reconcile
+    kubernetes.io/cluster-service: "true"
+  name: prometheus
+rules:
+- apiGroups:
+  - ""
+  resources:
+  - nodes
+  - nodes/metrics
+  - services
+  - endpoints
+  - pods
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - ""
+  resources:
+  - configmaps
+  verbs:
+  - get
+- nonResourceURLs:
+  - /metrics
+  verbs:
+  - get
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  labels:
+    addonmanager.kubernetes.io/mode: Reconcile
+    kubernetes.io/cluster-service: "true"
+  name: prometheus
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: prometheus
+subjects:
+- kind: ServiceAccount
+  name: prometheus
+  namespace: infra
+
+ubuntu@cyou2-203:/data/k8s-yaml/prometheus$ sudo vi dp.yaml 
+apiVersion: extensions/v1beta1
+kind: Deployment
+metadata:
+  annotations:
+    deployment.kubernetes.io/revision: "5"
+  labels:
+    name: prometheus
+  name: prometheus
+  namespace: infra
+spec:
+  progressDeadlineSeconds: 600
+  replicas: 1
+  revisionHistoryLimit: 7
+  selector:
+    matchLabels:
+      app: prometheus
+  strategy:
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 1
+    type: RollingUpdate
+  template:
+    metadata:
+      labels:
+        app: prometheus
+    spec:
+      nodeName: cyou2-201.host.com
+      containers:
+      - name: prometheus
+        image: harbor.cyou.com/infra/prometheus:v2.14.0
+        imagePullPolicy: IfNotPresent
+        command:
+        - /bin/prometheus
+        args:
+        - --config.file=/data/etc/prometheus.yml
+        - --storage.tsdb.path=/data/prom-db
+        - --storage.tsdb.min-block-duration=10m
+        - --storage.tsdb.retention=72h
+        ports:
+        - containerPort: 9090
+          protocol: TCP
+        volumeMounts:
+        - mountPath: /data
+          name: data
+        resources:
+          requests:
+            cpu: "500m"
+            memory: "1.5Gi"
+          limits:
+            cpu: "1000m"
+            memory: "3Gi"
+      imagePullSecrets:
+      - name: harbor
+      securityContext:
+        runAsUser: 0
+      serviceAccountName: prometheus
+      volumes:
+      - name: data
+        nfs:
+          server: cyou2-203.host.com
+          path: /data/nfs-volume/prometheus
+
+ubuntu@cyou2-203:/data/k8s-yaml/prometheus$ sudo vi service.yaml 
+apiVersion: v1
+kind: Service
+metadata:
+  name: prometheus
+  namespace: infra
+spec:
+  ports:
+  - port: 9090
+    protocol: TCP
+    targetPort: 9090
+  selector:
+    app: prometheus
+
+ubuntu@cyou2-203:/data/k8s-yaml/prometheus$ sudo vi ingress.yaml 
+apiVersion: extensions/v1beta1
+kind: Ingress
+metadata:
+  annotations:
+    kubernetes.io/ingress.class: traefik
+  name: prometheus
+  namespace: infra
+spec:
+  rules:
+  - host: prometheus.cyou.com
+    http:
+      paths:
+      - path: /
+        backend:
+          serviceName: prometheus
+          servicePort: 9090
+
+
+准备prometheus配置文件
+ubuntu@cyou2-203:~$ mkdir -pv /data/nfs-volume/prometheus/{etc,prom-db}
+mkdir: created directory ‘/data/nfs-volume/prometheus/etc’
+mkdir: created directory ‘/data/nfs-volume/prometheus/prom-db’
+ubuntu@cyou2-203:~$ cp /opt/certs/ca.pem /data/nfs-volume/prometheus/etc/
+ubuntu@cyou2-203:~$ cp /opt/certs/client.pem /data/nfs-volume/prometheus/etc/
+ubuntu@cyou2-203:~$ cp /opt/certs/client-key.pem /data/nfs-volume/prometheus/etc/
+
+ubuntu@cyou2-203:/data/nfs-volume/prometheus/etc$ ls
+ca.pem  client-key.pem  client.pem  prometheus.yml
+
+ubuntu@cyou2-203:/data/nfs-volume/prometheus/etc$ sudo vi prometheus.yml 
+global:
+  scrape_interval:     15s
+  evaluation_interval: 15s
+scrape_configs:
+- job_name: 'etcd'
+  tls_config:
+    ca_file: /data/etc/ca.pem
+    cert_file: /data/etc/client.pem
+    key_file: /data/etc/client-key.pem
+  scheme: https
+  static_configs:
+  - targets:
+    - '192.168.2.201:2379'
+    - '192.168.2.202:2379'
+    - '192.168.2.205:2379'
+- job_name: 'kubernetes-apiservers'
+  kubernetes_sd_configs:
+  - role: endpoints
+  scheme: https
+  tls_config:
+    ca_file: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+  bearer_token_file: /var/run/secrets/kubernetes.io/serviceaccount/token
+  relabel_configs:
+  - source_labels: [__meta_kubernetes_namespace, __meta_kubernetes_service_name, __meta_kubernetes_endpoint_port_name]
+    action: keep
+    regex: default;kubernetes;https
+- job_name: 'kubernetes-pods'
+  kubernetes_sd_configs:
+  - role: pod
+  relabel_configs:
+  - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_scrape]
+    action: keep
+    regex: true
+  - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_path]
+    action: replace
+    target_label: __metrics_path__
+    regex: (.+)
+  - source_labels: [__address__, __meta_kubernetes_pod_annotation_prometheus_io_port]
+    action: replace
+    regex: ([^:]+)(?::\d+)?;(\d+)
+    replacement: $1:$2
+    target_label: __address__
+  - action: labelmap
+    regex: __meta_kubernetes_pod_label_(.+)
+  - source_labels: [__meta_kubernetes_namespace]
+    action: replace
+    target_label: kubernetes_namespace
+  - source_labels: [__meta_kubernetes_pod_name]
+    action: replace
+    target_label: kubernetes_pod_name
+- job_name: 'kubernetes-kubelet'
+  kubernetes_sd_configs:
+  - role: node
+  relabel_configs:
+  - action: labelmap
+    regex: __meta_kubernetes_node_label_(.+)
+  - source_labels: [__meta_kubernetes_node_name]
+    regex: (.+)
+    target_label: __address__
+    replacement: ${1}:10255
+- job_name: 'kubernetes-cadvisor'
+  kubernetes_sd_configs:
+  - role: node
+  relabel_configs:
+  - action: labelmap
+    regex: __meta_kubernetes_node_label_(.+)
+  - source_labels: [__meta_kubernetes_node_name]
+    regex: (.+)
+    target_label: __address__
+    replacement: ${1}:4194
+- job_name: 'kubernetes-kube-state'
+  kubernetes_sd_configs:
+  - role: pod
+  relabel_configs:
+  - action: labelmap
+    regex: __meta_kubernetes_pod_label_(.+)
+  - source_labels: [__meta_kubernetes_namespace]
+    action: replace
+    target_label: kubernetes_namespace
+  - source_labels: [__meta_kubernetes_pod_name]
+    action: replace
+    target_label: kubernetes_pod_name
+  - source_labels: [__meta_kubernetes_pod_label_grafanak8sapp]
+    regex: .*true.*
+    action: keep
+  - source_labels: ['__meta_kubernetes_pod_label_daemon', '__meta_kubernetes_pod_node_name']
+    regex: 'node-exporter;(.*)'
+    action: replace
+    target_label: nodename
+- job_name: 'blackbox_http_pod_probe'
+  metrics_path: /probe
+  kubernetes_sd_configs:
+  - role: pod
+  params:
+    module: [http_2xx]
+  relabel_configs:
+  - source_labels: [__meta_kubernetes_pod_annotation_blackbox_scheme]
+    action: keep
+    regex: http
+  - source_labels: [__address__, __meta_kubernetes_pod_annotation_blackbox_port,  __meta_kubernetes_pod_annotation_blackbox_path]
+    action: replace
+    regex: ([^:]+)(?::\d+)?;(\d+);(.+)
+    replacement: $1:$2$3
+    target_label: __param_target
+  - action: replace
+    target_label: __address__
+    replacement: blackbox-exporter.kube-system:9115
+  - source_labels: [__param_target]
+    target_label: instance
+  - action: labelmap
+    regex: __meta_kubernetes_pod_label_(.+)
+  - source_labels: [__meta_kubernetes_namespace]
+    action: replace
+    target_label: kubernetes_namespace
+  - source_labels: [__meta_kubernetes_pod_name]
+    action: replace
+    target_label: kubernetes_pod_name
+- job_name: 'blackbox_tcp_pod_probe'
+  metrics_path: /probe
+  kubernetes_sd_configs:
+  - role: pod
+  params:
+    module: [tcp_connect]
+  relabel_configs:
+  - source_labels: [__meta_kubernetes_pod_annotation_blackbox_scheme]
+    action: keep
+    regex: tcp
+  - source_labels: [__address__, __meta_kubernetes_pod_annotation_blackbox_port]
+    action: replace
+    regex: ([^:]+)(?::\d+)?;(\d+)
+    replacement: $1:$2
+    target_label: __param_target
+  - action: replace
+    target_label: __address__
+    replacement: blackbox-exporter.kube-system:9115
+  - source_labels: [__param_target]
+    target_label: instance
+  - action: labelmap
+    regex: __meta_kubernetes_pod_label_(.+)
+  - source_labels: [__meta_kubernetes_namespace]
+    action: replace
+    target_label: kubernetes_namespace
+  - source_labels: [__meta_kubernetes_pod_name]
+    action: replace
+    target_label: kubernetes_pod_name
+- job_name: 'traefik'
+  kubernetes_sd_configs:
+  - role: pod
+  relabel_configs:
+  - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_scheme]
+    action: keep
+    regex: traefik
+  - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_path]
+    action: replace
+    target_label: __metrics_path__
+    regex: (.+)
+  - source_labels: [__address__, __meta_kubernetes_pod_annotation_prometheus_io_port]
+    action: replace
+    regex: ([^:]+)(?::\d+)?;(\d+)
+    replacement: $1:$2
+    target_label: __address__
+  - action: labelmap
+    regex: __meta_kubernetes_pod_label_(.+)
+  - source_labels: [__meta_kubernetes_namespace]
+    action: replace
+    target_label: kubernetes_namespace
+  - source_labels: [__meta_kubernetes_pod_name]
+    action: replace
+    target_label: kubernetes_pod_name
+
+
+ubuntu@cyou2-203:~$ sudo apt install nfs-kernel-server -y 
+ubuntu@cyou2-203:/data/nfs-volume/prometheus/etc$ sudo vi /etc/exports 
+/data/nfs-volume    192.168.2.0/24(rw,no_root_squash)
+ubuntu@cyou2-203:~$ systemctl restart nfs-kernel-server
+
+所有运算节点
+sudo apt install nfs-common -y
+
+
+
+
+应用资源配置清单
+ubuntu@cyou2-201:~$ kubectl apply -f http://k8s-yaml.cyou.com/prometheus/rbac.yaml
+ubuntu@cyou2-201:~$ kubectl apply -f http://k8s-yaml.cyou.com/prometheus/dp.yaml
+ubuntu@cyou2-201:~$ kubectl apply -f http://k8s-yaml.cyou.com/prometheus/service.yaml
+ubuntu@cyou2-201:~$ kubectl apply -f http://k8s-yaml.cyou.com/prometheus/ingress.yaml
+
+配置内网域名解析
+ubuntu@cyou2-204:~$ sudo vi /etc/bind/zones/db.cyou.com 
+;
+; BIND data file for local loopback interface
+;
+$ORIGIN cyou.com.
+$TTL	600 ; 10 minute
+@	IN	SOA	dns.cyou.com. dnsadmin.cyou.com. (
+			      8         ; Serial
+			 604800		; Refresh
+			  86400		; Retry
+			2419200		; Expire
+			 604800 )	; Negative Cache TTL
+		NS	dns.cyou.com.
+$TTL 60 ; 1 minute
+dns		A	192.168.2.204
+harbor		A	192.168.2.203
+k8s-yaml	A	192.168.2.203	
+traefik		A	192.168.2.200	
+dashboard	A	192.168.2.200	
+blackbox	A	192.168.2.200  
+prometheus	A	192.168.2.200  #添加
+
+ubuntu@cyou2-204:~$ sudo service bind9 reload
+ubuntu@cyou2-204:~$ dig -t A prometheus.cyou.com @192.168.2.204 +short
+浏览器访问prometheus.cyou.com
+
+
+traefik的pod控制器上加annotations，并重启pod，监控生效
+"annotations": {
+  "prometheus_io_scheme": "traefik",
+  "prometheus_io_path": "/metrics",
+  "prometheus_io_port": "8080"
+}
+
+blackbox*的pod控制器上加annotations，并重启pod，监控生效
+blackbox_tcp_pod_porbe:
+"annotations": {
+  "blackbox_port": "20880",
+  "blackbox_scheme": "tcp"
+}
+
+
+
+准备镜像
+
+ubuntu@cyou2-203:~$ docker pull grafana/grafana:5.4.2
+ubuntu@cyou2-203:~$ docker images |grep grafana
+ubuntu@cyou2-203:~$ docker tag 6f18ddf9e552 harbor.cyou.com/infra/grafana:v5.4.2
+ubuntu@cyou2-203:~$ docker push harbor.cyou.com/infra/grafana:v5.4.2
+准备资源配置清单
+ubuntu@cyou2-203:/data/k8s-yaml/grafana$ ls
+dp.yaml  ingress.yaml  rbac.yaml  service.yaml
+ubuntu@cyou2-203:/data/k8s-yaml/grafana$ sudo vi rbac.yaml 
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  labels:
+    addonmanager.kubernetes.io/mode: Reconcile
+    kubernetes.io/cluster-service: "true"
+  name: grafana
+rules:
+- apiGroups:
+  - "*"
+  resources:
+  - namespaces
+  - deployments
+  - pods
+  verbs:
+  - get
+  - list
+  - watch
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  labels:
+    addonmanager.kubernetes.io/mode: Reconcile
+    kubernetes.io/cluster-service: "true"
+  name: grafana
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: grafana
+subjects:
+- kind: User
+  name: k8s-node
+$ 
+ubuntu@cyou2-203:/data/k8s-yaml/grafana$ sudo vi dp.yaml 
+apiVersion: extensions/v1beta1
+kind: Deployment
+metadata:
+  labels:
+    app: grafana
+    name: grafana
+  name: grafana
+  namespace: infra
+spec:
+  progressDeadlineSeconds: 600
+  replicas: 1
+  revisionHistoryLimit: 7
+  selector:
+    matchLabels:
+      name: grafana
+  strategy:
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 1
+    type: RollingUpdate
+  template:
+    metadata:
+      labels:
+        app: grafana
+        name: grafana
+    spec:
+      containers:
+      - name: grafana
+        image: harbor.cyou.com/infra/grafana:v5.4.2
+        imagePullPolicy: IfNotPresent
+        ports:
+        - containerPort: 3000
+          protocol: TCP
+        volumeMounts:
+        - mountPath: /var/lib/grafana
+          name: data
+      imagePullSecrets:
+      - name: harbor
+      securityContext:
+        runAsUser: 0
+      volumes:
+      - nfs:
+          server: cyou2-203.host.com
+          path: /data/nfs-volume/grafana
+        name: data
+
+ubuntu@cyou2-203:/data/k8s-yaml/grafana$ sudo vi service.yaml 
+apiVersion: v1
+kind: Service
+metadata:
+  name: grafana
+  namespace: infra
+spec:
+  ports:
+  - port: 3000
+    protocol: TCP
+    targetPort: 3000
+  selector:
+    app: grafana
+
+ubuntu@cyou2-203:/data/k8s-yaml/grafana$ sudo vi ingress.yaml 
+apiVersion: extensions/v1beta1
+kind: Ingress
+metadata:
+  name: grafana
+  namespace: infra
+spec:
+  rules:
+  - host: grafana.cyou.com
+    http:
+      paths:
+      - path: /
+        backend:
+          serviceName: grafana
+          servicePort: 3000
+
+应用资源配置清单
+ubuntu@cyou2-201:~$ kubectl apply -f http://k8s-yaml.cyou.com/grafana/rbac.yaml
+ubuntu@cyou2-201:~$ kubectl apply -f http://k8s-yaml.cyou.com/grafana/dp.yaml
+ubuntu@cyou2-201:~$ kubectl apply -f http://k8s-yaml.cyou.com/grafana/service.yaml
+ubuntu@cyou2-201:~$ kubectl apply -f http://k8s-yaml.cyou.com/grafana/ingress.yaml
+
+配置内网域名解析
+ubuntu@cyou2-204:~$ sudo vi /etc/bind/zones/db.cyou.com 
+;
+; BIND data file for local loopback interface
+;
+$ORIGIN cyou.com.
+$TTL	600 ; 10 minute
+@	IN	SOA	dns.cyou.com. dnsadmin.cyou.com. (
+			      8         ; Serial
+			 604800		; Refresh
+			  86400		; Retry
+			2419200		; Expire
+			 604800 )	; Negative Cache TTL
+		NS	dns.cyou.com.
+$TTL 60 ; 1 minute
+dns		A	192.168.2.204
+harbor		A	192.168.2.203
+k8s-yaml	A	192.168.2.203	
+traefik		A	192.168.2.200	
+dashboard	A	192.168.2.200	
+blackbox	A	192.168.2.200  
+prometheus	A	192.168.2.200
+grafana	A	192.168.2.200  #添加
+
+ubuntu@cyou2-204:~$ sudo service bind9 reload
+ubuntu@cyou2-204:~$ dig -t A grafana.cyou.com @192.168.2.204 +short
+浏览器访问grafana.cyou.com
+
+
+
+
+
+
+准备镜像
+ubuntu@cyou2-203:~$ docker pull docker.io/prom/alertmanager:v0.14.0
+ubuntu@cyou2-203:~$ docker images |grep alertmanager
+ubuntu@cyou2-203:~$ docker tag 23744b2d645c harbor.cyou.com/infra/alertmanager:v0.14.0
+ubuntu@cyou2-203:~$ docker push harbor.cyou.com/infra/alertmanager:v0.14.0
+准备资源配置清单
+应用资源配置清单
+
+
+
+
+
