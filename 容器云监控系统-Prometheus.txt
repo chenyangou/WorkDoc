@@ -1127,9 +1127,291 @@ ubuntu@cyou2-203:~$ docker images |grep alertmanager
 ubuntu@cyou2-203:~$ docker tag 23744b2d645c harbor.cyou.com/infra/alertmanager:v0.14.0
 ubuntu@cyou2-203:~$ docker push harbor.cyou.com/infra/alertmanager:v0.14.0
 准备资源配置清单
+ubuntu@cyou2-203:/data/k8s-yaml/altermanager$ sudo vi cm.yaml 
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: alertmanager-config
+  namespace: infra
+data:
+  config.yml: |-
+    global:
+      resolve_timeout: 5m
+      smtp_smarthost: 'smtp.qq.com:465'
+      smtp_from: '1414248013@qq.com'
+      smtp_auth_username: '1414248013@qq.com'
+      smtp_auth_password: 'ipphexfdnhqjiebh'
+      smtp_require_tls: false
+    route:
+      group_by: ['alertname', 'cluster']
+      group_wait: 30s
+
+      group_interval: 5m
+
+      repeat_interval: 5m
+
+      receiver: default
+
+    receivers:
+    - name: 'default'
+      email_configs:
+      - to: 'chenyangou96@163.com'
+        send_resolved: true
+ubuntu@cyou2-203:/data/k8s-yaml/altermanager$ sudo vi dp.yaml 
+apiVersion: extensions/v1beta1
+kind: Deployment
+metadata:
+  name: alertmanager
+  namespace: infra
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: alertmanager
+  template:
+    metadata:
+      labels:
+        app: alertmanager
+    spec:
+      containers:
+      - name: alertmanager
+        image: harbor.cyou.com/infra/alertmanager:v0.14.0
+        args:
+          - "--config.file=/etc/alertmanager/config.yml"
+          - "--storage.path=/alertmanager"
+        ports:
+        - name: alertmanager
+          containerPort: 9093
+        volumeMounts:
+        - name: alertmanager-cm
+          mountPath: /etc/alertmanager
+      volumes:
+      - name: alertmanager-cm
+        configMap:
+          name: alertmanager-config
+      imagePullSecrets:
+      - name: harbor
+ubuntu@cyou2-203:/data/k8s-yaml/altermanager$ sudo vi service.yaml 
+apiVersion: v1
+kind: Service
+metadata:
+  name: alertmanager
+  namespace: infra
+spec:
+  selector: 
+    app: alertmanager
+  ports:
+    - port: 80
+      targetPort: 9093
+
 应用资源配置清单
+ubuntu@cyou2-201:~$ kubectl apply -f http://k8s-yaml.cyou.com/altermanager/cm.yaml
+configmap/alertmanager-config created
+ubuntu@cyou2-201:~$ kubectl apply -f http://k8s-yaml.cyou.com/altermanager/dp.yaml
+deployment.extensions/alertmanager created
+ubuntu@cyou2-201:~$ kubectl apply -f http://k8s-yaml.cyou.com/altermanager/service.yaml
+service/alertmanager created
+ubuntu@cyou2-201:~$ kubectl get pods -n infra
+NAME                            READY   STATUS    RESTARTS   AGE
+alertmanager-5c7f5b6fc5-h97s7   1/1     Running   0          29s
+grafana-868fc658fd-jd6g9        1/1     Running   0          42d
+prometheus-66ddb7496b-6r599     1/1     Running   0          42d
 
+修改报警规则
+ubuntu@cyou2-203:/data/nfs-volume/prometheus/etc$ sudo vi rules.yaml 
+groups:
+- name: hostStatsAlert
+  rules:
+  - alert: hostCpuUsageAlert
+    expr: sum(avg without (cpu)(irate(node_cpu{mode!='idle'}[5m]))) by (instance) > 0.85
+    for: 5m
+    labels:
+      severity: warning
+    annotations:
+      summary: "{{ $labels.instance }} CPU usage above 85% (current value: {{ $value }}%)"
+  - alert: hostMemUsageAlert
+    expr: (node_memory_MemTotal - node_memory_MemAvailable)/node_memory_MemTotal > 0.85
+    for: 5m
+    labels:
+      severity: warning
+    annotations:
+      summary: "{{ $labels.instance }} MEM usage above 85% (current value: {{ $value }}%)"
+  - alert: OutOfInodes
+    expr: node_filesystem_free{fstype="overlay",mountpoint ="/"} / node_filesystem_size{fstype="overlay",mountpoint ="/"} * 100 < 10
+    for: 5m
+    labels:
+      severity: warning
+    annotations:
+      summary: "Out of inodes (instance {{ $labels.instance }})"
+      description: "Disk is almost running out of available inodes (< 10% left) (current value: {{ $value }})"
+  - alert: OutOfDiskSpace
+    expr: node_filesystem_free{fstype="overlay",mountpoint ="/rootfs"} / node_filesystem_size{fstype="overlay",mountpoint ="/rootfs"} * 100 < 10
+    for: 5m
+    labels:
+      severity: warning
+    annotations:
+      summary: "Out of disk space (instance {{ $labels.instance }})"
+      description: "Disk is almost full (< 10% left) (current value: {{ $value }})"
+  - alert: UnusualNetworkThroughputIn
+ubuntu@cyou2-203:/data/nfs-volume/prometheus/etc$ 
+ubuntu@cyou2-203:/data/nfs-volume/prometheus/etc$ 
+ubuntu@cyou2-203:/data/nfs-volume/prometheus/etc$ 
+ubuntu@cyou2-203:/data/nfs-volume/prometheus/etc$ 
+ubuntu@cyou2-203:/data/nfs-volume/prometheus/etc$ 
+ubuntu@cyou2-203:/data/nfs-volume/prometheus/etc$ 
+ubuntu@cyou2-203:/data/nfs-volume/prometheus/etc$ 
+ubuntu@cyou2-203:/data/nfs-volume/prometheus/etc$ more rules.yaml 
+groups:
+- name: hostStatsAlert
+  rules:
+  - alert: hostCpuUsageAlert
+    expr: sum(avg without (cpu)(irate(node_cpu{mode!='idle'}[5m]))) by (instance) > 0.85
+    for: 5m
+    labels:
+      severity: warning
+    annotations:
+      summary: "{{ $labels.instance }} CPU usage above 85% (current value: {{ $value }}%)"
+  - alert: hostMemUsageAlert
+    expr: (node_memory_MemTotal - node_memory_MemAvailable)/node_memory_MemTotal > 0.85
+    for: 5m
+    labels:
+      severity: warning
+    annotations:
+      summary: "{{ $labels.instance }} MEM usage above 85% (current value: {{ $value }}%)"
+  - alert: OutOfInodes
+    expr: node_filesystem_free{fstype="overlay",mountpoint ="/"} / node_filesystem_size{fstype="overlay",mountpoint ="/"} * 100 < 10
+    for: 5m
+    labels:
+      severity: warning
+    annotations:
+      summary: "Out of inodes (instance {{ $labels.instance }})"
+      description: "Disk is almost running out of available inodes (< 10% left) (current value: {{ $value }})"
+  - alert: OutOfDiskSpace
+    expr: node_filesystem_free{fstype="overlay",mountpoint ="/rootfs"} / node_filesystem_size{fstype="overlay",mountpoint ="/rootfs"} * 100 < 10
+    for: 5m
+    labels:
+      severity: warning
+    annotations:
+      summary: "Out of disk space (instance {{ $labels.instance }})"
+      description: "Disk is almost full (< 10% left) (current value: {{ $value }})"
+  - alert: UnusualNetworkThroughputIn
+    expr: sum by (instance) (irate(node_network_receive_bytes[2m])) / 1024 / 1024 > 100
+    for: 5m
+    labels:
+      severity: warning
+    annotations:
+      summary: "Unusual network throughput in (instance {{ $labels.instance }})"
+      description: "Host network interfaces are probably receiving too much data (> 100 MB/s) (current value: {{ $value }})"
+  - alert: UnusualNetworkThroughputOut
+    expr: sum by (instance) (irate(node_network_transmit_bytes[2m])) / 1024 / 1024 > 100
+    for: 5m
+    labels:
+      severity: warning
+    annotations:
+      summary: "Unusual network throughput out (instance {{ $labels.instance }})"
+      description: "Host network interfaces are probably sending too much data (> 100 MB/s) (current value: {{ $value }})"
+  - alert: UnusualDiskReadRate
+    expr: sum by (instance) (irate(node_disk_bytes_read[2m])) / 1024 / 1024 > 50
+    for: 5m
+    labels:
+      severity: warning
+    annotations:
+      summary: "Unusual disk read rate (instance {{ $labels.instance }})"
+      description: "Disk is probably reading too much data (> 50 MB/s) (current value: {{ $value }})"
+  - alert: UnusualDiskWriteRate
+    expr: sum by (instance) (irate(node_disk_bytes_written[2m])) / 1024 / 1024 > 50
+    for: 5m
+    labels:
+      severity: warning
+    annotations:
+      summary: "Unusual disk write rate (instance {{ $labels.instance }})"
+      description: "Disk is probably writing too much data (> 50 MB/s) (current value: {{ $value }})"
+  - alert: UnusualDiskReadLatency
+    expr: rate(node_disk_read_time_ms[1m]) / rate(node_disk_reads_completed[1m]) > 100
+    for: 5m
+    labels:
+      severity: warning
+    annotations:
+      summary: "Unusual disk read latency (instance {{ $labels.instance }})"
+      description: "Disk latency is growing (read operations > 100ms) (current value: {{ $value }})"
+  - alert: UnusualDiskWriteLatency
+    expr: rate(node_disk_write_time_ms[1m]) / rate(node_disk_writes_completedl[1m]) > 100
+    for: 5m
+    labels:
+      severity: warning
+    annotations:
+      summary: "Unusual disk write latency (instance {{ $labels.instance }})"
+      description: "Disk latency is growing (write operations > 100ms) (current value: {{ $value }})"
+- name: http_status
+  rules:
+  - alert: ProbeFailed
+    expr: probe_success == 0
+    for: 1m
+    labels:
+      severity: error
+    annotations:
+      summary: "Probe failed (instance {{ $labels.instance }})"
+      description: "Probe failed (current value: {{ $value }})"
+  - alert: StatusCode
+    expr: probe_http_status_code <= 199 OR probe_http_status_code >= 400
+    for: 1m
+    labels:
+      severity: error
+    annotations:
+      summary: "Status Code (instance {{ $labels.instance }})"
+      description: "HTTP status code is not 200-399 (current value: {{ $value }})"
+  - alert: SslCertificateWillExpireSoon
+    expr: probe_ssl_earliest_cert_expiry - time() < 86400 * 30
+    for: 5m
+    labels:
+      severity: warning
+    annotations:
+      summary: "SSL certificate will expire soon (instance {{ $labels.instance }})"
+      description: "SSL certificate expires in 30 days (current value: {{ $value }})"
+  - alert: SslCertificateHasExpired
+    expr: probe_ssl_earliest_cert_expiry - time()  <= 0
+    for: 5m
+    labels:
+      severity: error
+    annotations:
+      summary: "SSL certificate has expired (instance {{ $labels.instance }})"
+      description: "SSL certificate has expired already (current value: {{ $value }})"
+  - alert: BlackboxSlowPing
+    expr: probe_icmp_duration_seconds > 2
+    for: 5m
+    labels:
+      severity: warning
+    annotations:
+      summary: "Blackbox slow ping (instance {{ $labels.instance }})"
+      description: "Blackbox ping took more than 2s (current value: {{ $value }})"
+  - alert: BlackboxSlowRequests
+    expr: probe_http_duration_seconds > 2 
+    for: 5m
+    labels:
+      severity: warning
+    annotations:
+      summary: "Blackbox slow requests (instance {{ $labels.instance }})"
+      description: "Blackbox request took more than 2s (current value: {{ $value }})"
+  - alert: PodCpuUsagePercent
+    expr: sum(sum(label_replace(irate(container_cpu_usage_seconds_total[1m]),"pod","$1","container_label_io_kubernetes_pod_name", "(.*)"))by(pod) / on(pod) group_right ku
+be_pod_container_resource_limits_cpu_cores *100 )by(container,namespace,node,pod,severity) > 80
+    for: 5m
+    labels:
+      severity: warning
+    annotations:
+      summary: "Pod cpu usage percent has exceeded 80% (current value: {{ $value }}%)"
 
+prometheus加载报警规；在结尾把报警配置追加上
 
+ubuntu@cyou2-203:/data/nfs-volume/prometheus/etc$ sudo vi prometheus.yml 
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: ["alertmanager"]
+rule_files:
+ - "/data/etc/rules.yml"
+
+平滑重启prometheus
 
 
